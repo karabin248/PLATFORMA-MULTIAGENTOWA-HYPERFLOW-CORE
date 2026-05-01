@@ -1,0 +1,151 @@
+# =============================================================================
+# GitLab Workspaces devfile — full Hyperflow-PLATFORM stack in the browser
+# =============================================================================
+# Opens a workspace with 5 containers sharing localhost:
+#   development-environment — VS Code editor (Node, Python, pnpm, drizzle-kit)
+#   postgres                — PostgreSQL 16
+#   core                    — Hyperflow Python core (localhost:8000)
+#   api-server              — Express shell           (localhost:8080)
+#   operator-panel          — React SPA via nginx     (localhost:8082 → publ)
+#
+# Since all containers share the same pod network, services talk over
+# `localhost` (NOT service names, unlike docker-compose).
+#
+# Docs: https://docs.gitlab.com/ee/user/workspace/
+# Schema: https://devfile.io/docs/2.2.0/devfile-schema
+# =============================================================================
+schemaVersion: 2.2.0
+
+variables:
+  # Default dev credentials — override via Workspace variables UI if needed.
+  POSTGRES_USER: hyperflow
+  POSTGRES_PASSWORD: hyperflow
+  POSTGRES_DB: hyperflow
+
+components:
+  # ---------------------------------------------------------------------------
+  # Editor container — gets the GitLab VS Code fork injected automatically.
+  # This is where we clone the repo, install deps, and run db-migrate.
+  # ---------------------------------------------------------------------------
+  - name: development-environment
+    attributes:
+      gl/inject-editor: true
+    container:
+      image: registry.gitlab.com/gitlab-org/gitlab-build-images:workspaces-base
+      memoryLimit: 4Gi
+      cpuLimit: 2000m
+      env:
+        - name: DATABASE_URL
+          value: "postgres://hyperflow:hyperflow@localhost:5432/hyperflow"
+        - name: HYPERFLOW_CORE_URL
+          value: "http://localhost:8000"
+        - name: CI
+          value: "true"
+
+  # ---------------------------------------------------------------------------
+  # PostgreSQL sidecar — shares localhost with the editor.
+  # ---------------------------------------------------------------------------
+  - name: postgres
+    container:
+      image: postgres:16-alpine
+      memoryLimit: 512Mi
+      cpuLimit: 500m
+      env:
+        - name: POSTGRES_USER
+          value: hyperflow
+        - name: POSTGRES_PASSWORD
+          value: hyperflow
+        - name: POSTGRES_DB
+          value: hyperflow
+        - name: PGDATA
+          value: /var/lib/postgresql/data/pgdata
+      endpoints:
+        - name: postgres
+          targetPort: 5432
+          exposure: internal
+
+  # ---------------------------------------------------------------------------
+  # Python Core sidecar — uses the image built by our .gitlab-ci.yml pipeline.
+  # Falls back to :latest on main; for branches use :<commit-sha> via override.
+  # ---------------------------------------------------------------------------
+  - name: core
+    container:
+      image: registry.gitlab.com/hyperflow1/hyperflow-platform/core:latest
+      memoryLimit: 1Gi
+      cpuLimit: 1000m
+      env:
+        - name: PORT
+          value: "8000"
+        - name: HOST
+          value: "0.0.0.0"
+      endpoints:
+        - name: core-health
+          targetPort: 8000
+          exposure: internal
+
+  # ---------------------------------------------------------------------------
+  # API Server sidecar — talks to postgres + core over localhost.
+  # Starts only after db-migrate command has run (see commands + events below).
+  # ---------------------------------------------------------------------------
+  - name: api-server
+    container:
+      image: registry.gitlab.com/hyperflow1/hyperflow-platform/api-server:latest
+      memoryLimit: 512Mi
+      cpuLimit: 500m
+      env:
+        - name: PORT
+          value: "8080"
+        - name: NODE_ENV
+          value: production
+        - name: HARDENED_MODE
+          value: "false"
+        - name: LOG_LEVEL
+          value: info
+        - name: HYPERFLOW_CORE_URL
+          value: "http://localhost:8000"
+        - name: DATABASE_URL
+          value: "postgres://hyperflow:hyperflow@localhost:5432/hyperflow"
+      endpoints:
+        - name: api-server
+          targetPort: 8080
+          exposure: internal
+
+  # ---------------------------------------------------------------------------
+  # Operator Panel sidecar — nginx serving the built React SPA.
+  # Exposed publicly: GitLab gives you a URL that routes to this port.
+  # ---------------------------------------------------------------------------
+  - name: operator-panel
+    container:
+      image: registry.gitlab.com/hyperflow1/hyperflow-platform/operator-panel:latest
+      memoryLimit: 256Mi
+      cpuLimit: 250m
+      endpoints:
+        - name: operator-panel
+          targetPort: 80
+          exposure: public
+          protocol: https
+
+commands:
+  # One-shot: wait for postgres, install deps, push drizzle schema.
+  # Runs in the editor container so it can see the cloned repo source.
+  - id: db-migrate
+    exec:
+      component: development-environment
+      commandLine: |
+        set -e
+        echo "⏳ Waiting for postgres on localhost:5432..."
+        for i in $(seq 1 30); do
+          if nc -z localhost 5432 2>/dev/null; then echo "✅ postgres ready"; break; fi
+          sleep 1
+        done
+        corepack enable
+        corepack prepare pnpm@9.15.4 --activate
+        pnpm install --frozen-lockfile
+        pnpm --filter @workspace/db run push
+        echo "✅ Schema pushed. Platform ready."
+        echo "🌐 Open the operator-panel URL from the Workspaces UI."
+      hotReloadCapable: false
+
+events:
+  postStart:
+    - db-migrate

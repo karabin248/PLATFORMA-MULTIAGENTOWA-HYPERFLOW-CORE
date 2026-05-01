@@ -1,0 +1,46 @@
+# VCS & editor metadata
+.git
+.gitignore
+.gitlab-ci.yml
+.idea
+.vscode
+
+# Build outputs (rebuilt inside the image)
+**/dist
+**/build
+**/.next
+**/.turbo
+
+# Dependency caches — we run a fresh `pnpm install` in the builder stage
+**/node_modules
+**/.pnpm-store
+**/.pip-cache
+**/__pycache__
+**/*.pyc
+
+# Python build metadata
+**/*.egg-info
+**/.pytest_cache
+**/.mypy_cache
+**/.ruff_cache
+
+# hyperflow-core runtime data — JSONL session/knowledge stores are created
+# on first boot; shipping them in the image would bake in stale state.
+artifacts/hyperflow-core/storage
+artifacts/hyperflow-core/dist
+
+# Explicitly KEEP the following (negated) — they are needed in the api-server
+# runtime image so it can self-migrate with `drizzle-kit push`:
+!lib/db/src
+!lib/db/package.json
+!lib/db/drizzle.config.ts
+
+# Local-only / editor docs not needed at runtime
+docs
+replit.md
+.replit
+attached_assets
+
+# OS junk
+.DS_Store
+Thumbs.db

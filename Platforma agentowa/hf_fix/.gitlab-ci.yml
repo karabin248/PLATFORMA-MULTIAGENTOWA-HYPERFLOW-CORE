@@ -1,0 +1,453 @@
+# =============================================================================
+# Hyperflow-PLATFORM CI/CD Pipeline
+# =============================================================================
+# Monorepo pipeline for Python (FastAPI core) and Node.js (pnpm workspace).
+# Uses base jobs to reduce duplication, DAG (`needs`) for parallelism,
+# and path-based rules so jobs only run when relevant files change.
+# =============================================================================
+
+# Run on MRs, on branches (when no MR is open for that branch, to avoid
+# duplicate pipelines), and on tags. `CI_OPEN_MERGE_REQUESTS` is set for a
+# branch pipeline when an MR exists for it; in that case we skip the branch
+# pipeline and let the MR pipeline run instead.
+workflow:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH && $CI_OPEN_MERGE_REQUESTS
+      when: never
+    - if: $CI_COMMIT_BRANCH
+    - if: $CI_COMMIT_TAG
+
+# -----------------------------------------------------------------------------
+# Includes — GitLab-managed security scanners
+# -----------------------------------------------------------------------------
+# SAST auto-detects languages in the monorepo (Python, TS/JS, C#) and spawns
+# the appropriate analyzer jobs. Secret Detection scans the repo for leaked
+# API keys, tokens, and credentials. Dependency Scanning detects known CVEs
+# in pip and pnpm dependencies, complementing our SBOM generation.
+# Reports feed into the MR Security widget.
+include:
+  - template: Jobs/SAST.gitlab-ci.yml
+  - template: Jobs/Secret-Detection.gitlab-ci.yml
+  - template: Jobs/Dependency-Scanning.gitlab-ci.yml
+
+stages:
+  - verify
+  - test
+  - build
+  - sandbox
+  - package
+
+default:
+  interruptible: true
+
+# -----------------------------------------------------------------------------
+# Rule templates — reusable rule sets for path-based triggering
+# -----------------------------------------------------------------------------
+# These rules are MR-aware: on MR pipelines, `changes:` compares against the
+# target branch (reliable). On branch/tag pipelines, we run the full set.
+# The `CI_OPEN_MERGE_REQUESTS` guard in workflow.rules prevents duplicate
+# branch+MR pipelines, so these rules can safely match both sources.
+
+# Python jobs run when Python-related files change, or always on main/tags
+.rules-python:
+  rules:
+    - if: $CI_COMMIT_TAG
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      changes:
+        - .gitlab-ci.yml
+        - artifacts/hyperflow-core/**/*
+        - scripts/generate_uv_sbom.py
+        - scripts/generate_provenance_manifest.py
+    - if: $CI_COMMIT_BRANCH
+      changes:
+        - .gitlab-ci.yml
+        - artifacts/hyperflow-core/**/*
+        - scripts/generate_uv_sbom.py
+        - scripts/generate_provenance_manifest.py
+
+# Node.js jobs run when JS/TS-related files change, or always on main/tags
+.rules-node:
+  rules:
+    - if: $CI_COMMIT_TAG
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      changes:
+        - .gitlab-ci.yml
+        - artifacts/api-server/**/*
+        - artifacts/operator-panel/**/*
+        - artifacts/mockup-sandbox/**/*
+        - lib/**/*
+        - scripts/**/*
+        - package.json
+        - pnpm-lock.yaml
+        - pnpm-workspace.yaml
+        - tsconfig*.json
+    - if: $CI_COMMIT_BRANCH
+      changes:
+        - .gitlab-ci.yml
+        - artifacts/api-server/**/*
+        - artifacts/operator-panel/**/*
+        - artifacts/mockup-sandbox/**/*
+        - lib/**/*
+        - scripts/**/*
+        - package.json
+        - pnpm-lock.yaml
+        - pnpm-workspace.yaml
+        - tsconfig*.json
+
+# Rules for Docker image builds: triggered by changes in the component's source,
+# its Dockerfile, or docker-compose.yml; always runs on main and tags so we
+# keep `:latest` fresh and tag-based releases always produce images.
+.rules-docker-core:
+  rules:
+    - if: $CI_COMMIT_TAG
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      changes:
+        - artifacts/hyperflow-core/**/*
+        - docker-compose.yml
+        - .dockerignore
+    - if: $CI_COMMIT_BRANCH
+      changes:
+        - artifacts/hyperflow-core/**/*
+        - docker-compose.yml
+        - .dockerignore
+
+.rules-docker-node:
+  rules:
+    - if: $CI_COMMIT_TAG
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      changes:
+        - artifacts/api-server/**/*
+        - artifacts/operator-panel/**/*
+        - lib/**/*
+        - package.json
+        - pnpm-lock.yaml
+        - pnpm-workspace.yaml
+        - docker-compose.yml
+        - .dockerignore
+    - if: $CI_COMMIT_BRANCH
+      changes:
+        - artifacts/api-server/**/*
+        - artifacts/operator-panel/**/*
+        - lib/**/*
+        - package.json
+        - pnpm-lock.yaml
+        - pnpm-workspace.yaml
+        - docker-compose.yml
+        - .dockerignore
+
+# -----------------------------------------------------------------------------
+# Base jobs — shared configuration extracted to reduce duplication
+# -----------------------------------------------------------------------------
+
+# Base for all Python 3.12 jobs: image, pip caching, and common setup
+#
+# SECURITY-TODO (M-1 / pre-production): Restore digest pinning before deploying.
+# Fake placeholder was removed to unblock CI. Replace the image line below with:
+#   image: "python:3.12@sha256:<DIGEST>"
+# where <DIGEST> comes from:
+#   docker pull python:3.12-slim
+#   docker inspect python:3.12-slim --format '{{index .RepoDigests 0}}'
+# Use Renovate or a CI digest-update job for automated maintenance.
+# Do NOT deploy to production without pinned digests — supply-chain risk.
+.python-base:
+  image: "python:3.12"
+  variables:
+    PIP_CACHE_DIR: "$CI_PROJECT_DIR/.pip-cache"
+  cache:
+    key: pip-${CI_JOB_NAME_SLUG}
+    paths:
+      - .pip-cache
+  before_script:
+    - python -V
+    - python -m pip install --upgrade pip==25.0.1 setuptools==80.10.2 wheel==0.45.1
+
+# Base for all Node.js 24 jobs: image, pnpm store caching, and workspace install
+#
+# SECURITY-TODO (M-1 / pre-production): Restore digest pinning before deploying.
+# Fake placeholder was removed to unblock CI. Replace the image line below with:
+#   image: "node:24@sha256:<DIGEST>"
+# where <DIGEST> comes from:
+#   docker pull node:24-slim
+#   docker inspect node:24-slim --format '{{index .RepoDigests 0}}'
+# Use Renovate for automated digest maintenance.
+# Do NOT deploy to production without pinned digests — supply-chain risk.
+.node-base:
+  image: "node:24"
+  variables:
+    PNPM_STORE_DIR: ".pnpm-store"
+  cache:
+    key:
+      files:
+        - pnpm-lock.yaml
+    paths:
+      - .pnpm-store
+  before_script:
+    - corepack enable
+    - corepack prepare pnpm@9.15.4 --activate
+    - pnpm config set store-dir .pnpm-store
+    - pnpm install --frozen-lockfile
+
+# Base for Docker image builds using Kaniko. Kaniko builds images in userspace
+# without requiring Docker-in-Docker or privileged runners, which aligns with
+# GitLab.com shared runners (no privileged mode available).
+# Docs: https://docs.gitlab.com/ci/docker/using_kaniko/
+.kaniko-base:
+  image:
+    name: gcr.io/kaniko-project/executor:v1.23.2-debug
+    entrypoint: [""]
+  variables:
+    GODEBUG: "http2client=0"
+  before_script:
+    # Authenticate to the project's Container Registry using the job token.
+    - mkdir -p /kaniko/.docker
+    - |
+      echo "{\"auths\":{\"$CI_REGISTRY\":{\"auth\":\"$(printf '%s:%s' "$CI_REGISTRY_USER" "$CI_REGISTRY_PASSWORD" | base64 | tr -d '\n')\"}}}" > /kaniko/.docker/config.json
+
+# =============================================================================
+# VERIFY stage — linting, type-checking, import validation, health checks
+# =============================================================================
+
+# Validates that the hyperflow Python package imports correctly, CLI works,
+# all core modules are importable, and unit tests pass
+python_core_release_verify:
+  extends:
+    - .python-base
+  stage: verify
+  rules: !reference [.rules-python, rules]
+  script:
+    - cd artifacts/hyperflow-core
+    - pip install -r requirements-ci.txt
+    - pip install -e .
+    - make release-verify
+
+# Starts the FastAPI server and confirms the /v1/health endpoint responds
+python_core_health_smoke:
+  extends:
+    - .python-base
+  stage: verify
+  rules: !reference [.rules-python, rules]
+  script:
+    - cd artifacts/hyperflow-core
+    - pip install -r requirements-ci.txt
+    - pip install -e .
+    - python3 main.py > core.log 2>&1 &
+    - |
+      for i in $(seq 1 20); do
+        python -c 'import json,urllib.request; data=json.load(urllib.request.urlopen("http://127.0.0.1:8000/v1/health", timeout=2)); print(data); assert data["status"]=="ok"' && break
+        if [ "$i" -eq 20 ]; then
+          echo "Python core did not become healthy"
+          cat core.log || true
+          exit 1
+        fi
+        sleep 1
+      done
+  artifacts:
+    when: always
+    paths:
+      - artifacts/hyperflow-core/core.log
+    expire_in: "7 days"
+
+# Runs TypeScript type-checking across the entire pnpm workspace
+workspace_typecheck:
+  extends:
+    - .node-base
+  stage: verify
+  rules: !reference [.rules-node, rules]
+  script:
+    - pnpm run typecheck
+
+# =============================================================================
+# TEST stage — integration and functional tests
+# =============================================================================
+
+# Runs api-server integration tests after type-checking passes
+workspace_integration_test:
+  extends:
+    - .node-base
+  stage: test
+  rules: !reference [.rules-node, rules]
+  needs:
+    - job: workspace_typecheck
+      artifacts: false  # no artifacts needed, just gate on success
+  script:
+    - pnpm --filter @workspace/api-server run test:integration
+
+# =============================================================================
+# BUILD stage — packaging, SBOM generation, provenance manifests
+# =============================================================================
+
+# Builds Python wheel/sdist, runs packaging smoke tests, generates SBOM
+# and provenance manifest
+python_core_packaging:
+  extends:
+    - .python-base
+  stage: build
+  rules: !reference [.rules-python, rules]
+  needs:
+    - job: python_core_release_verify
+      artifacts: false  # gate on verify passing, no artifact transfer needed
+  script:
+    - cd artifacts/hyperflow-core
+    - pip install -r requirements-ci.txt
+    - pip install -e .
+    - make packaging-smoke
+    - mkdir -p dist
+    - python -m pip list --format=json > dist/python-installed-packages.json
+    - python3 ../../scripts/generate_uv_sbom.py --pip-list-json dist/python-installed-packages.json --component hyperflow-python-core --output dist/hyperflow-python-sbom.json
+    - python3 ../../scripts/generate_provenance_manifest.py --component hyperflow-python-core --output-dir dist --output-file dist/hyperflow-python-provenance.json
+  artifacts:
+    when: always
+    paths:
+      - artifacts/hyperflow-core/dist/
+    expire_in: "7 days"
+
+# Builds api-server and operator-panel, generates SBOM and provenance manifest
+workspace_build:
+  extends:
+    - .node-base
+  stage: build
+  rules: !reference [.rules-node, rules]
+  variables:
+    PNPM_STORE_DIR: ".pnpm-store"
+    PORT: "4173"
+    BASE_PATH: "/"
+    PWA_ENABLED: "false"
+  needs:
+    - job: workspace_integration_test
+      artifacts: false  # gate on tests passing, no artifact transfer needed
+  script:
+    - pnpm --filter ./artifacts/api-server run build
+    - pnpm --filter ./artifacts/operator-panel run build
+    - cd artifacts/api-server && pnpm dlx @cyclonedx/cyclonedx-npm@4.2.1 --ignore-npm-errors --output-format json --output-file dist/api-server-sbom.json && cd ../..
+    - node -e "const fs=require('fs'); const crypto=require('crypto'); const path=require('path'); const out='artifacts/api-server/dist'; const files=fs.readdirSync(out).filter(f=>fs.statSync(path.join(out,f)).isFile()); const sha=(file)=>crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex'); const manifest={component:'api-server',generatedAt:new Date().toISOString(),revision:process.env.CI_COMMIT_SHA||null,ci:{gitlab_pipeline_id:process.env.CI_PIPELINE_ID||null,gitlab_job_id:process.env.CI_JOB_ID||null},subjects:files.map(f=>({path:f,sha256:sha(path.join(out,f)),size:fs.statSync(path.join(out,f)).size}))}; fs.writeFileSync(path.join(out,'api-server-provenance.json'), JSON.stringify(manifest,null,2)+'\n');"
+  artifacts:
+    when: always
+    paths:
+      - artifacts/api-server/dist/
+      - artifacts/operator-panel/dist/
+    expire_in: "7 days"
+
+# =============================================================================
+# SANDBOX stage — experimental builds (failures do not block the pipeline)
+# =============================================================================
+
+# Builds the mockup sandbox app; allowed to fail since it's experimental
+sandbox_build:
+  extends:
+    - .node-base
+  stage: sandbox
+  rules: !reference [.rules-node, rules]
+  allow_failure: true  # experimental — does not block the pipeline
+  needs:
+    - job: workspace_typecheck
+      artifacts: false  # only needs typecheck to pass, no artifacts
+  variables:
+    PNPM_STORE_DIR: ".pnpm-store"
+    PORT: "8080"
+    BASE_PATH: "/"
+  script:
+    - pnpm --filter ./artifacts/mockup-sandbox run build
+
+# =============================================================================
+# PACKAGE stage — Docker images pushed to GitLab Container Registry
+# =============================================================================
+# Uses Kaniko (rootless, no DinD) — works on GitLab.com shared runners.
+# Tags every build with `:$CI_COMMIT_SHA`. Additionally tags `:latest` only
+# on the default branch, and `:<tag>` on git tag pipelines, so downstream
+# deployment tooling can pin either a commit SHA, `latest`, or a release tag.
+# Images are pushed to: $CI_REGISTRY_IMAGE/<component>:<tag>
+# i.e. registry.gitlab.com/hyperflow1/hyperflow-platform/<component>:<tag>
+
+# Builds the Python Core image (FastAPI + uvicorn on port 8000).
+# Gated on release-verify passing so we never ship an image that fails tests.
+docker_build_core:
+  extends:
+    - .kaniko-base
+  stage: package
+  rules: !reference [.rules-docker-core, rules]
+  needs:
+    # optional: Python-only jobs may be skipped by .rules-python when a
+    # commit only touches docker infra. The Docker build has its own
+    # independent rules and should still run.
+    - job: python_core_release_verify
+      artifacts: false
+      optional: true
+  script:
+    - DESTS="--destination $CI_REGISTRY_IMAGE/core:$CI_COMMIT_SHA"
+    - if [ "$CI_COMMIT_BRANCH" = "$CI_DEFAULT_BRANCH" ]; then DESTS="$DESTS --destination $CI_REGISTRY_IMAGE/core:latest"; fi
+    - if [ -n "$CI_COMMIT_TAG" ]; then DESTS="$DESTS --destination $CI_REGISTRY_IMAGE/core:$CI_COMMIT_TAG"; fi
+    - /kaniko/executor
+      --context "$CI_PROJECT_DIR"
+      --dockerfile "$CI_PROJECT_DIR/artifacts/hyperflow-core/Dockerfile"
+      $DESTS
+
+# Builds the API Server image (Node.js + Express on port 8080).
+# Gated on workspace_build so we know typecheck + integration tests passed.
+docker_build_api:
+  extends:
+    - .kaniko-base
+  stage: package
+  rules: !reference [.rules-docker-node, rules]
+  needs:
+    # optional: see note on docker_build_core.
+    - job: workspace_build
+      artifacts: false
+      optional: true
+  script:
+    - DESTS="--destination $CI_REGISTRY_IMAGE/api-server:$CI_COMMIT_SHA"
+    - if [ "$CI_COMMIT_BRANCH" = "$CI_DEFAULT_BRANCH" ]; then DESTS="$DESTS --destination $CI_REGISTRY_IMAGE/api-server:latest"; fi
+    - if [ -n "$CI_COMMIT_TAG" ]; then DESTS="$DESTS --destination $CI_REGISTRY_IMAGE/api-server:$CI_COMMIT_TAG"; fi
+    - /kaniko/executor
+      --context "$CI_PROJECT_DIR"
+      --dockerfile "$CI_PROJECT_DIR/artifacts/api-server/Dockerfile"
+      $DESTS
+
+# Builds the Operator Panel image (static Vite build served by nginx on port 80).
+# Gated on workspace_build; PWA is disabled in the build for parity with CI.
+docker_build_panel:
+  extends:
+    - .kaniko-base
+  stage: package
+  rules: !reference [.rules-docker-node, rules]
+  needs:
+    # optional: see note on docker_build_core.
+    - job: workspace_build
+      artifacts: false
+      optional: true
+  script:
+    - DESTS="--destination $CI_REGISTRY_IMAGE/operator-panel:$CI_COMMIT_SHA"
+    - if [ "$CI_COMMIT_BRANCH" = "$CI_DEFAULT_BRANCH" ]; then DESTS="$DESTS --destination $CI_REGISTRY_IMAGE/operator-panel:latest"; fi
+    - if [ -n "$CI_COMMIT_TAG" ]; then DESTS="$DESTS --destination $CI_REGISTRY_IMAGE/operator-panel:$CI_COMMIT_TAG"; fi
+    - /kaniko/executor
+      --context "$CI_PROJECT_DIR"
+      --dockerfile "$CI_PROJECT_DIR/artifacts/operator-panel/Dockerfile"
+      $DESTS
+
+# =============================================================================
+# SECURITY — override for included Secret Detection template
+# =============================================================================
+# Only `secret_detection` needs a rules override to match our workflow
+# (MRs + branches + tags). We do NOT override `sast`: it's a dispatcher job
+# whose default script intentionally exits 1 to prevent it from running
+# directly. Overriding its rules would bypass the template's `when: never`
+# guard and cause the dispatcher to execute its guard script, failing the
+# pipeline. The real work happens in language-specific sub-jobs (semgrep-sast,
+# gitlab-advanced-sast) which the template activates automatically based on
+# detected file types.
+#
+# Dependency Scanning template jobs (gemnasium-*) are left at defaults; the
+# template already enables MR pipelines via its own AST_ENABLE_MR_PIPELINES
+# handling and runs on branches by default.
+
+# Scans the repo for leaked secrets (API keys, tokens, credentials).
+secret_detection:
+  stage: test
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH
+    - if: $CI_COMMIT_TAG

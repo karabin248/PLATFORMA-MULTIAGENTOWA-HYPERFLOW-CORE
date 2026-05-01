@@ -1,0 +1,62 @@
+uploads = []
+generated = []
+
+[[outputs]]
+id = "DlZezRCmGrYTXRXMS_CZV"
+uri = "file://screenshots/agent-catalog.jpg"
+type = "image"
+title = "Agent Catalog (/agents)"
+
+[[outputs]]
+id = "4kmdEEZF6Zo_skw728ZV3"
+uri = "file://screenshots/run-history.jpg"
+type = "image"
+title = "Run History (/runs)"
+
+[[outputs]]
+id = "8XL70_5u1l4zcDniYWQMo"
+uri = "file://screenshots/run-detail-canonical.jpg"
+type = "image"
+title = "Run Detail with Canonical Trace"
+
+[[outputs]]
+id = "Kl_uJZpLIuo7xARTOqJY4"
+uri = "file://screenshots/sprint2-dashboard.jpg"
+type = "image"
+title = "Dashboard with Live Metrics"
+
+[[outputs]]
+id = "8WfhDfDwGJKdIUkHQDtg6"
+uri = "file://screenshots/sprint2-agents.jpg"
+type = "image"
+title = "Agent Catalog with Create Button"
+
+[[outputs]]
+id = "N0_8IX2lHYe3IROvSow91"
+uri = "file://screenshots/sprint2-agent-detail.jpg"
+type = "image"
+title = "Agent Detail with Edit/Disable + Revisions Tab"
+
+[[outputs]]
+id = "mvXEoJNfbNabtj_nvRdAA"
+uri = "file://screenshots/sprint2-runs.jpg"
+type = "image"
+title = "Run History with Filters"
+
+[[outputs]]
+id = "le_bb_ZqCPQVQ0fI31X-J"
+uri = "file://screenshots/sprint2-run-detail.jpg"
+type = "image"
+title = "Run Detail - Metadata + Canonical Trace"
+
+[[outputs]]
+id = "fzL8NH25AriXtQrTDc9pb"
+uri = "file://screenshots/sprint2-run-detail-output.jpg"
+type = "image"
+title = "Run Detail - Normalized/Raw Output Toggle (Full Page)"
+
+[[outputs]]
+id = "nQC2xPmE6BYBzq99asA7Z"
+uri = "file://screenshots/sprint2-agent-create.jpg"
+type = "image"
+title = "Agent Create Form"

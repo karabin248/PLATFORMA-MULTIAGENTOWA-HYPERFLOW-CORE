@@ -1,0 +1,4 @@
+{
+  "tests/test_api_smoke.py::TestRepositoriesScan::test_repositories_scan_rejects_plain_http": true,
+  "tests/test_api_smoke.py::TestRepositoriesScan::test_repositories_scan_rejects_file_scheme": true
+}

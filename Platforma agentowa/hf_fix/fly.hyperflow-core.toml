@@ -1,0 +1,16 @@
+app = "hyperflow-core"
+primary_region = "ams"
+
+[build]
+  dockerfile = "artifacts/hyperflow-core/Dockerfile"
+
+[env]
+  PORT = "8000"
+  HOST = "fly-local-6pn"
+  HYPERFLOW_ENV = "production"
+  OPENROUTER_MODEL = "openai/gpt-4o-mini"
+
+# This file intentionally omits an [http_service] section.  The core runs
+# as a private internal service, listening on fly-local-6pn:8000.  It is
+# reachable from the api-server over the 6PN network via
+# hyperflow-core.internal:8000 and has no public or proxy-exposed ports.

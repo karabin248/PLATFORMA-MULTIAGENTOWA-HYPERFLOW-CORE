@@ -1,0 +1,49 @@
+{
+  "$schema": "./canonical_semantics.schema.json",
+  "version": "1.2",
+  "cycle": {
+    "order": [
+      "perceive",
+      "extract_essence",
+      "sense_direction",
+      "synthesize",
+      "generate_options",
+      "choose"
+    ],
+    "symbols": {
+      "perceive": "🌈",
+      "extract_essence": "💎",
+      "sense_direction": "🔥",
+      "synthesize": "🧠",
+      "generate_options": "🔀",
+      "choose": "⚡"
+    },
+    "positions": {
+      "perceive": 1,
+      "extract_essence": 2,
+      "sense_direction": 3,
+      "synthesize": 4,
+      "generate_options": 5,
+      "choose": 6
+    }
+  },
+  "invariants": {
+    "options_before_decision": true,
+    "terminal_decision": true,
+    "fixed_order": true,
+    "no_skipping": true,
+    "no_repetition": true
+  },
+  "execution_model": "state -> trajectory -> readout",
+  "authority": {
+    "execution": "python_core",
+    "observer": "typescript_shell"
+  },
+  "docs": {
+    "cycle": "docs/CANONICAL_CYCLE.md",
+    "contract": "docs/EDDE_CONTRACT.md",
+    "layers": "docs/CANONICAL_LAYERS.md",
+    "terms": "docs/CANONICAL_TERMS.md",
+    "alignment": "docs/CANONICAL_ALIGNMENT.md"
+  }
+}

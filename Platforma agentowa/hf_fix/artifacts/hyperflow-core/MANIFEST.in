@@ -1,0 +1,14 @@
+include README.md
+include requirements.txt
+recursive-include hyperflow *.py
+recursive-include language *.py
+recursive-include control *.py
+recursive-include engine *.py
+recursive-include memory *.py
+recursive-include scanner *.py
+recursive-include configs *.json *.schema.json
+recursive-include tests *.py
+global-exclude __pycache__
+global-exclude *.pyc
+global-exclude *.pyo
+global-exclude .DS_Store

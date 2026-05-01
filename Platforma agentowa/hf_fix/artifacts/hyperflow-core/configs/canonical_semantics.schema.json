@@ -1,0 +1,88 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hyperflow.local/schemas/canonical_semantics.schema.json",
+  "title": "Hyperflow Canonical Semantics",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "cycle", "invariants", "execution_model", "authority"],
+  "properties": {
+    "version": {
+      "type": "string",
+      "pattern": "^1\\.[0-9]+$"
+    },
+    "cycle": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["order", "symbols", "positions"],
+      "properties": {
+        "order": {
+          "type": "array",
+          "minItems": 6,
+          "maxItems": 6,
+          "prefixItems": [
+            { "const": "perceive" },
+            { "const": "extract_essence" },
+            { "const": "sense_direction" },
+            { "const": "synthesize" },
+            { "const": "generate_options" },
+            { "const": "choose" }
+          ]
+        },
+        "symbols": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["perceive", "extract_essence", "sense_direction", "synthesize", "generate_options", "choose"],
+          "properties": {
+            "perceive": { "const": "🌈" },
+            "extract_essence": { "const": "💎" },
+            "sense_direction": { "const": "🔥" },
+            "synthesize": { "const": "🧠" },
+            "generate_options": { "const": "🔀" },
+            "choose": { "const": "⚡" }
+          }
+        },
+        "positions": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["perceive", "extract_essence", "sense_direction", "synthesize", "generate_options", "choose"],
+          "properties": {
+            "perceive": { "const": 1 },
+            "extract_essence": { "const": 2 },
+            "sense_direction": { "const": 3 },
+            "synthesize": { "const": 4 },
+            "generate_options": { "const": 5 },
+            "choose": { "const": 6 }
+          }
+        }
+      }
+    },
+    "invariants": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["options_before_decision", "terminal_decision", "fixed_order", "no_skipping", "no_repetition"],
+      "properties": {
+        "options_before_decision": { "const": true },
+        "terminal_decision": { "const": true },
+        "fixed_order": { "const": true },
+        "no_skipping": { "const": true },
+        "no_repetition": { "const": true }
+      }
+    },
+    "execution_model": {
+      "const": "state -> trajectory -> readout"
+    },
+    "authority": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["execution", "observer"],
+      "properties": {
+        "execution": { "const": "python_core" },
+        "observer": { "const": "typescript_shell" }
+      }
+    },
+    "docs": {
+      "type": "object",
+      "additionalProperties": true
+    }
+  }
+}

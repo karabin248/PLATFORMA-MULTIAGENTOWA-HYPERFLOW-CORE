@@ -1,0 +1,151 @@
+# =============================================================================
+# Hyperflow-PLATFORM — local development stack
+# =============================================================================
+# Run:   docker compose up --build
+# Stop:  docker compose down        (keep DB)
+#        docker compose down -v     (wipe DB volume)
+#
+# Services:
+#   postgres        → PostgreSQL 16 for api-server persistence
+#   db-migrate      → one-shot init: runs `drizzle-kit push` to create tables
+#   core            → Python FastAPI runtime          (port 8000)
+#   api-server      → Node.js Express shell           (port 8080)
+#   operator-panel  → React SPA served by nginx       (host 8082 → container 80)
+#
+# All variables can be overridden via a local .env file (see .env.example).
+# Credentials never appear literally in a URL to satisfy Secret Detection.
+# =============================================================================
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-hyperflow}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-hyperflow}
+      POSTGRES_DB: ${POSTGRES_DB:-hyperflow}
+    ports:
+      - "5432:5432"
+    volumes:
+      - hyperflow_pgdata:/var/lib/postgresql/data
+    # Wait until Postgres is actually accepting connections before
+    # letting db-migrate / api-server start.
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-hyperflow} -d ${POSTGRES_DB:-hyperflow}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # api-server's startup calls verifySchema() which does `SELECT id FROM agents`.
+  # Without tables it fails. This init container runs `drizzle-kit push` once
+  # against the running postgres, creates the schema, and exits. api-server
+  # waits for it to complete successfully via `depends_on: condition: service_completed_successfully`.
+  db-migrate:
+    image: node:24-alpine
+    working_dir: /repo
+    volumes:
+      - .:/repo
+    environment:
+      CI: "true"
+      DATABASE_URL: "postgres://${POSTGRES_USER:-hyperflow}:${POSTGRES_PASSWORD:-hyperflow}@postgres:5432/${POSTGRES_DB:-hyperflow}"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: >
+      sh -c "corepack enable &&
+             corepack prepare pnpm@9.15.4 --activate &&
+             pnpm install --frozen-lockfile &&
+             pnpm --filter @workspace/db run push"
+    restart: "no"
+
+  core:
+    build:
+      context: .
+      dockerfile: artifacts/hyperflow-core/Dockerfile
+    image: hyperflow-core:dev
+    environment:
+      PORT: "8000"
+      HOST: "0.0.0.0"
+      # Leave OPENROUTER_API_KEY empty to run in deterministic stub mode;
+      # all 6 EDDE phases still execute, just without real LLM calls.
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      OPENROUTER_MODEL: ${OPENROUTER_MODEL:-openai/gpt-4o-mini}
+      # Harden the core by default.  Set the runtime environment to
+      # production so that HYPERFLOW_CORE_TOKEN becomes mandatory and the
+      # core refuses to start if the token is missing.  See main.py for
+      # enforcement logic.
+      HYPERFLOW_ENV: "production"
+      # EX-1/M-2: Limit orphan LLM call duration on client disconnect.
+      # Default 300 s is too long. 30 s is a reasonable per-step budget.
+      # Override per workflow via retryPolicy.timeoutSeconds on individual steps.
+      HYPERFLOW_STEP_TIMEOUT_S: "30"
+      # Internal token that the api-server must forward via the x-internal-token
+      # header.  Define this in your .env file.  The core will not start in
+      # production if this is absent.
+      HYPERFLOW_CORE_TOKEN: ${HYPERFLOW_CORE_TOKEN:-}
+    # Do not publish the core's port on the host.  The core should only be
+    # reachable from within the compose network via the api-server.  Exposing
+    # port 8000 publicly breaks the runtime boundary and allows unauthenticated
+    # access to the Python runtime.  See security audit report for details.
+    # ports:
+    #   - "8000:8000"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/v1/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+
+  api-server:
+    build:
+      context: .
+      dockerfile: artifacts/api-server/Dockerfile
+    image: hyperflow-api-server:dev
+    environment:
+      PORT: "8080"
+      NODE_ENV: "production"
+      # api-server reads HYPERFLOW_CORE_URL (see src/lib/config.ts)
+      HYPERFLOW_CORE_URL: "http://core:8000"
+      # DATABASE_URL is composed from the same POSTGRES_* env vars used by
+      # the postgres service, so credentials are never duplicated.
+      DATABASE_URL: "postgres://${POSTGRES_USER:-hyperflow}:${POSTGRES_PASSWORD:-hyperflow}@postgres:5432/${POSTGRES_DB:-hyperflow}"
+      # Hardened mode defaults to on.  Set to false only in rare development cases.
+      HARDENED_MODE: "true"
+      # When running behind a reverse proxy set TRUST_PROXY=1 so that Express will
+      # trust the X-Forwarded-For header.  Leave 0 (or unset) in direct deployments
+      # to prevent IP spoofing and rate limiter bypass.
+      TRUST_PROXY: ${TRUST_PROXY:-0}
+      # Propagate the internal core token so that the api-server can forward it to the Python core.
+      HYPERFLOW_CORE_TOKEN: ${HYPERFLOW_CORE_TOKEN:-}
+      API_TOKEN: ${API_TOKEN:-}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      db-migrate:
+        condition: service_completed_successfully
+      core:
+        condition: service_healthy
+    ports:
+      - "8080:8080"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/api/livez"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+
+  operator-panel:
+    build:
+      context: .
+      dockerfile: artifacts/operator-panel/Dockerfile
+    image: hyperflow-operator-panel:dev
+    depends_on:
+      api-server:
+        condition: service_healthy
+    # Host port 8082 to avoid colliding with api-server on 8080.
+    # Open http://localhost:8082 in your browser.
+    ports:
+      - "8082:80"
+
+volumes:
+  hyperflow_pgdata:

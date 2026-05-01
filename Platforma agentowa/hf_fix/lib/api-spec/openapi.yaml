@@ -1,0 +1,1731 @@
+openapi: 3.1.0
+info:
+  # Do not change the title, if the title changes, the import paths will be broken
+  title: Api
+  version: 0.3.0
+  description: Hyperflow Agent Platform API specification
+servers:
+  - url: /api
+    description: Base API path
+security:
+  - bearerAuth: []
+tags:
+  - name: health
+    description: Health operations
+  - name: agents
+    description: Agent catalog management
+  - name: agent-runs
+    description: Agent execution and run management
+  - name: workflows
+    description: Workflow definition management
+  - name: workflow-runs
+    description: Workflow execution and run management
+  - name: approvals
+    description: Workflow approval gate management
+  - name: human-inputs
+    description: Workflow human-input node management
+
+paths:
+  /livez:
+    get:
+      security: []
+      operationId: liveCheck
+      tags: [health]
+      summary: Liveness check
+      description: Returns minimal public liveness status
+      responses:
+        "200":
+          description: Alive
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthStatus"
+
+  /readyz:
+    get:
+      operationId: readinessCheck
+      tags: [health]
+      summary: Readiness check
+      description: Returns authenticated dependency readiness status
+      responses:
+        "200":
+          description: Ready
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthStatus"
+        "503":
+          description: Not ready
+
+  /healthz:
+    get:
+      operationId: healthCheck
+      tags: [health]
+      summary: Detailed health check
+      description: Returns authenticated detailed server health status
+      responses:
+        "200":
+          description: Healthy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthStatus"
+        "503":
+          description: Degraded
+
+  /metrics:
+    get:
+      operationId: metricsScrape
+      tags: [health]
+      summary: Prometheus metrics
+      description: Returns authenticated Prometheus metrics text output
+      responses:
+        "200":
+          description: Metrics payload
+          content:
+            text/plain:
+              schema:
+                type: string
+
+  /agents:
+    get:
+      operationId: listAgents
+      tags: [agents]
+      summary: List agents
+      parameters:
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [active, disabled, deprecated]
+        - name: role
+          in: query
+          schema:
+            type: string
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 50
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            default: 0
+      responses:
+        "200":
+          description: Agent list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  agents:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Agent"
+                  total:
+                    type: integer
+                required: [agents, total]
+    post:
+      operationId: createAgent
+      tags: [agents]
+      summary: Create a new agent
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateAgentPayload"
+      responses:
+        "201":
+          description: Agent created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Agent"
+        "400":
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ValidationError"
+        "409":
+          description: Agent already exists
+
+  /agents/{id}:
+    get:
+      operationId: getAgent
+      tags: [agents]
+      summary: Get agent detail
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Agent detail
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Agent"
+        "404":
+          description: Agent not found
+    patch:
+      operationId: updateAgent
+      tags: [agents]
+      summary: Update agent (creates revision)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateAgentPayload"
+      responses:
+        "200":
+          description: Agent updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Agent"
+        "400":
+          description: Validation error
+        "404":
+          description: Agent not found
+
+  /agents/{id}/disable:
+    post:
+      operationId: disableAgent
+      tags: [agents]
+      summary: Disable an agent
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Agent disabled
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Agent"
+        "404":
+          description: Agent not found
+        "409":
+          description: Agent already disabled
+
+  /agents/{id}/enable:
+    post:
+      operationId: enableAgent
+      tags: [agents]
+      summary: Enable an agent
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Agent enabled
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Agent"
+        "404":
+          description: Agent not found
+        "409":
+          description: Agent already active
+
+  /agents/{id}/revisions:
+    get:
+      operationId: getRevisions
+      tags: [agents]
+      summary: Get agent revision history
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Revision list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  agentId:
+                    type: string
+                  revisions:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/AgentRevision"
+                  total:
+                    type: integer
+                required: [agentId, revisions, total]
+        "404":
+          description: Agent not found
+
+  /agents/seed:
+    post:
+      operationId: seedAgents
+      tags: [agents]
+      summary: Seed default agents
+      responses:
+        "200":
+          description: Seed result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  seeded:
+                    type: integer
+                  skipped:
+                    type: integer
+
+  /agents/run:
+    post:
+      operationId: runAgent
+      tags: [agent-runs]
+      summary: Execute an agent
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AgentRunRequest"
+      responses:
+        "200":
+          description: Run completed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RunResponse"
+        "404":
+          description: Agent not found
+        "409":
+          description: Agent not active
+
+  /agent-runs:
+    get:
+      operationId: listRuns
+      tags: [agent-runs]
+      summary: List agent runs
+      parameters:
+        - name: agentId
+          in: query
+          schema:
+            type: string
+        - name: agentVersion
+          in: query
+          schema:
+            type: string
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [queued, running, completed, failed, cancelled]
+        - name: requestedBy
+          in: query
+          schema:
+            type: string
+        - name: from
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - name: to
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - name: hasError
+          in: query
+          schema:
+            type: string
+            enum: ["true"]
+        - name: minQualityScore
+          in: query
+          schema:
+            type: number
+        - name: retryOf
+          in: query
+          schema:
+            type: string
+        - name: q
+          in: query
+          schema:
+            type: string
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 50
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            default: 0
+      responses:
+        "200":
+          description: Run list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  runs:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/AgentRun"
+                  total:
+                    type: integer
+                  limit:
+                    type: integer
+                  offset:
+                    type: integer
+                required: [runs, total, limit, offset]
+
+  /agent-runs/metrics:
+    get:
+      operationId: getMetrics
+      tags: [agent-runs]
+      summary: Aggregate run metrics
+      responses:
+        "200":
+          description: Metrics
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RunMetrics"
+
+  /agent-runs/{id}:
+    get:
+      operationId: getRun
+      tags: [agent-runs]
+      summary: Get run detail
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Run detail
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgentRun"
+        "404":
+          description: Run not found
+
+  /agent-runs/{id}/retry:
+    post:
+      operationId: retryRun
+      tags: [agent-runs]
+      summary: Retry a failed run
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reason:
+                  type: string
+      responses:
+        "200":
+          description: Retry result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RetryResponse"
+        "404":
+          description: Run not found
+        "409":
+          description: Run not retryable
+
+  /agent-runs/{id}/resume:
+    post:
+      operationId: resumeRun
+      tags: [agent-runs]
+      summary: Resume a run (not supported)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "405":
+          description: Resume not supported
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  supportedActions:
+                    type: array
+                    items:
+                      type: string
+
+  /agent-runs/{id}/cancel:
+    post:
+      operationId: cancelRun
+      tags: [agent-runs]
+      summary: Cancel a queued or running run
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Run cancelled
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: string
+                  status:
+                    type: string
+                  cancelledAt:
+                    type: string
+                    format: date-time
+                required: [id, status, cancelledAt]
+        "404":
+          description: Run not found
+        "409":
+          description: Invalid state transition
+
+
+  /workflows:
+    get:
+      operationId: listWorkflows
+      tags: [workflows]
+      summary: List workflow definitions
+      responses:
+        "200":
+          description: Workflow list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  workflows:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/WorkflowDefinition"
+                  total:
+                    type: integer
+                required: [workflows, total]
+    post:
+      operationId: createWorkflow
+      tags: [workflows]
+      summary: Create a workflow definition
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateWorkflowPayload"
+      responses:
+        "201":
+          description: Workflow created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkflowDefinition"
+        "409":
+          description: Workflow already exists
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OrchestratorError"
+
+  /workflow-runs:
+    get:
+      operationId: listWorkflowRuns
+      tags: [workflow-runs]
+      summary: List workflow runs
+      parameters:
+        - name: workflowId
+          in: query
+          schema:
+            type: string
+        - name: status
+          in: query
+          schema:
+            $ref: "#/components/schemas/WorkflowRunStatus"
+      responses:
+        "200":
+          description: Run list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  runs:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/WorkflowRun"
+                  total:
+                    type: integer
+                required: [runs, total]
+    post:
+      operationId: runWorkflow
+      tags: [workflow-runs]
+      summary: Start a workflow run
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/WorkflowRunRequest"
+      responses:
+        "202":
+          description: Run admitted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkflowRunAdmittedResponse"
+        "404":
+          description: Workflow not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OrchestratorError"
+
+  /workflow-runs/{id}:
+    get:
+      operationId: getWorkflowRun
+      tags: [workflow-runs]
+      summary: Get a workflow run by ID
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Workflow run detail
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkflowRunDetail"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OrchestratorError"
+
+  /workflow-runs/{id}/resume:
+    post:
+      operationId: resumeWorkflowRun
+      tags: [workflow-runs]
+      summary: Resume a paused workflow run
+      description: |
+        Resumes a workflow run that is blocked pending an approval or human input
+        (after the blocking condition has been resolved). Python is the sole execution
+        authority; TS projects the resulting snapshot.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/WorkflowResumeRequest"
+      responses:
+        "200":
+          description: Run resumed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkflowRunAdmittedResponse"
+        "409":
+          description: Run not resumable (pending approvals, terminal state, invalid checkpoint)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OrchestratorError"
+
+
+  /workflow-runs/{id}/cancel:
+    post:
+      operationId: cancelWorkflowRun
+      tags: [workflow-runs]
+      summary: Request cancellation of a workflow run
+      description: |
+        If the run is queued (not yet executing), it is immediately cancelled.
+        If the run is executing, cancellation is requested and the executor honours it
+        at the next safe checkpoint. Returns the resulting status.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                requestedBy:
+                  type: string
+      responses:
+        "200":
+          description: Cancellation applied or requested
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CancelResponse"
+        "409":
+          description: Run already in terminal state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OrchestratorError"
+
+  /approvals:
+    get:
+      operationId: listApprovals
+      tags: [approvals]
+      summary: List approval requests
+      parameters:
+        - name: runId
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Approval list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  approvals:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Approval"
+                  total:
+                    type: integer
+                required: [approvals, total]
+    post:
+      operationId: createApproval
+      tags: [approvals]
+      summary: Create an approval request for a workflow node
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateApprovalRequest"
+      responses:
+        "201":
+          description: Approval created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Approval"
+        "409":
+          description: Duplicate approval
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OrchestratorError"
+
+  /approvals/{id}/decision:
+    post:
+      operationId: decideApproval
+      tags: [approvals]
+      summary: Approve or reject an approval request
+      description: |
+        Records the approval decision and delegates continuation to Python.
+        On approval: Python advances workflow execution and returns authoritative snapshot.
+        On rejection: run is immediately terminated with status=failed.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ApprovalDecision"
+      responses:
+        "200":
+          description: Decision recorded
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Approval"
+        "404":
+          description: Approval not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OrchestratorError"
+
+  /workflow-runs/{id}/nodes/{nodeId}/input:
+    post:
+      operationId: submitHumanInput
+      tags: [human-inputs]
+      summary: Submit human input for a waiting_input workflow node
+      description: |
+        Submits human-supplied input for a node in waiting_input state and delegates
+        continuation to Python. Python advances execution and returns authoritative snapshot.
+        TS projects the snapshot only.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: nodeId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/HumanInputPayload"
+      responses:
+        "202":
+          description: Input accepted, continuation in progress
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HumanInputAccepted"
+        "409":
+          description: Node not in waiting_input state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OrchestratorError"
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: opaque
+      description: >
+        API token passed as `Authorization: Bearer <token>`. Required on
+        protected endpoints when HARDENED_MODE=true. Development mode may
+        bypass auth depending on server configuration.
+  schemas:
+    HealthStatus:
+      type: object
+      properties:
+        status:
+          type: string
+      required:
+        - status
+
+    Agent:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        version:
+          type: string
+        description:
+          type: string
+        status:
+          type: string
+          enum: [active, disabled, deprecated]
+        role:
+          type: string
+        capabilities:
+          type: array
+          items:
+            type: string
+        inputSchema:
+          type: object
+        outputSchema:
+          type: object
+        runtimeMode:
+          type: string
+        executionPolicy:
+          type: object
+        promptTemplate:
+          type: string
+        tags:
+          type: array
+          items:
+            type: string
+        owner:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+      required: [id, name, version, status, role, capabilities, runtimeMode, promptTemplate, tags, createdAt, updatedAt]
+
+    CreateAgentPayload:
+      type: object
+      properties:
+        id:
+          type: string
+          minLength: 3
+          maxLength: 64
+          pattern: "^[a-z0-9][a-z0-9\\-]{2,63}$"
+        name:
+          type: string
+          minLength: 1
+          maxLength: 128
+        version:
+          type: string
+          pattern: "^\\d+\\.\\d+\\.\\d+$"
+        description:
+          type: string
+          maxLength: 2048
+        role:
+          type: string
+        capabilities:
+          type: array
+          items:
+            type: string
+        promptTemplate:
+          type: string
+        tags:
+          type: array
+          items:
+            type: string
+        runtimeMode:
+          type: string
+          enum: [standard, fast, careful, creative]
+        executionPolicy:
+          type: object
+        inputSchema:
+          type: object
+        outputSchema:
+          type: object
+      required: [id, name, version]
+
+    UpdateAgentPayload:
+      type: object
+      properties:
+        name:
+          type: string
+        version:
+          type: string
+        description:
+          type: string
+        role:
+          type: string
+        capabilities:
+          type: array
+          items:
+            type: string
+        promptTemplate:
+          type: string
+        tags:
+          type: array
+          items:
+            type: string
+        runtimeMode:
+          type: string
+        executionPolicy:
+          type: object
+        inputSchema:
+          type: object
+        outputSchema:
+          type: object
+        owner:
+          type: string
+          nullable: true
+
+    AgentRevision:
+      type: object
+      properties:
+        id:
+          type: integer
+        agentId:
+          type: string
+        revisionNumber:
+          type: integer
+        spec:
+          type: object
+        changedFields:
+          type: array
+          items:
+            type: string
+        changedBy:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+      required: [id, agentId, revisionNumber, spec, changedFields, changedBy, createdAt]
+
+    NormalizedOutput:
+      type: object
+      properties:
+        summary:
+          type: string
+        structured:
+          type: object
+        artifacts:
+          type: array
+          items:
+            type: string
+        qualityScore:
+          type: number
+          nullable: true
+        warnings:
+          type: array
+          items:
+            type: string
+        nextSuggestedAction:
+          type: string
+          nullable: true
+      required: [summary, structured, artifacts, warnings]
+
+    CanonicalTrace:
+      type: object
+      properties:
+        canonical_combo:
+          type: string
+        canonical_phases:
+          type: array
+          items:
+            type: string
+        phases_completed:
+          type: array
+          items:
+            type: string
+        terminal_phase:
+          type: string
+        order_preserved:
+          type: boolean
+        cycle_version:
+          type: string
+        mps_level:
+          type: integer
+        mps_name:
+          type: string
+        canonical_combo_detected:
+          type: boolean
+
+    AgentRun:
+      type: object
+      properties:
+        id:
+          type: string
+        agentId:
+          type: string
+        agentVersion:
+          type: string
+        status:
+          type: string
+          enum: [queued, running, completed, failed, cancelled]
+        input:
+          type: object
+        output:
+          type: object
+          nullable: true
+        normalizedOutput:
+          $ref: "#/components/schemas/NormalizedOutput"
+        error:
+          type: string
+          nullable: true
+        runtimeRunId:
+          type: string
+          nullable: true
+        canonicalTrace:
+          $ref: "#/components/schemas/CanonicalTrace"
+        qualityScore:
+          type: number
+          nullable: true
+        parentRunId:
+          type: string
+          nullable: true
+        originRunId:
+          type: string
+          nullable: true
+        retryCount:
+          type: integer
+        retryReason:
+          type: string
+          nullable: true
+        requestedBy:
+          type: string
+          nullable: true
+        queuedAt:
+          type: string
+          format: date-time
+          nullable: true
+        startedAt:
+          type: string
+          format: date-time
+          nullable: true
+        completedAt:
+          type: string
+          format: date-time
+          nullable: true
+        failedAt:
+          type: string
+          format: date-time
+          nullable: true
+        cancelledAt:
+          type: string
+          format: date-time
+          nullable: true
+        durationMs:
+          type: integer
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+        retryChain:
+          type: array
+          items:
+            type: object
+            properties:
+              id:
+                type: string
+              status:
+                type: string
+              parentRunId:
+                type: string
+                nullable: true
+              createdAt:
+                type: string
+                format: date-time
+            required: [id, status, createdAt]
+      required: [id, agentId, agentVersion, status, input, createdAt]
+
+    AgentRunRequest:
+      type: object
+      properties:
+        agentId:
+          type: string
+        input:
+          type: object
+        requestedBy:
+          type: string
+          default: operator
+        correlationId:
+          type: string
+        runPolicy:
+          type: object
+      required: [agentId]
+
+    RunResponse:
+      type: object
+      properties:
+        runId:
+          type: string
+        agentId:
+          type: string
+        status:
+          type: string
+        output:
+          type: object
+          nullable: true
+        normalizedOutput:
+          $ref: "#/components/schemas/NormalizedOutput"
+        qualityScore:
+          type: number
+          nullable: true
+        intent:
+          type: string
+          nullable: true
+        mode:
+          type: string
+          nullable: true
+        canonicalCombo:
+          type: string
+          nullable: true
+        canonicalPhases:
+          type: array
+          items:
+            type: string
+          nullable: true
+        canonicalTrace:
+          $ref: "#/components/schemas/CanonicalTrace"
+        durationMs:
+          type: integer
+      required: [runId, agentId, status]
+
+    RetryResponse:
+      type: object
+      properties:
+        originalRunId:
+          type: string
+        retryRunId:
+          type: string
+        originRunId:
+          type: string
+        retryCount:
+          type: integer
+        status:
+          type: string
+        output:
+          type: object
+          nullable: true
+        normalizedOutput:
+          $ref: "#/components/schemas/NormalizedOutput"
+        canonicalTrace:
+          $ref: "#/components/schemas/CanonicalTrace"
+      required: [originalRunId, retryRunId, originRunId, retryCount, status]
+
+    RunMetrics:
+      type: object
+      properties:
+        total:
+          type: integer
+        completed:
+          type: integer
+        failed:
+          type: integer
+        cancelled:
+          type: integer
+        retried:
+          type: integer
+        avgDurationMs:
+          type: integer
+          nullable: true
+        avgQualityScore:
+          type: number
+          nullable: true
+      required: [total, completed, failed, cancelled, retried]
+
+
+    WorkflowRunStatus:
+      type: string
+      enum:
+        - queued
+        - running
+        - waiting_approval
+        - waiting_input
+        - completed
+        - failed
+        - cancelled
+      description: |
+        Authoritative run status. Python is the sole authority for transitions.
+        TS projects Python snapshots only.
+        - waiting_approval: blocked on an approval gate node
+        - waiting_input: blocked on a human-input node
+
+    WorkflowNodeStatus:
+      type: string
+      enum:
+        - pending
+        - ready
+        - running
+        - blocked
+        - waiting_input
+        - waiting_approval
+        - succeeded
+        - failed_retryable
+        - failed_terminal
+        - compensated
+        - skipped
+
+    WorkflowResumabilityReason:
+      type: string
+      enum:
+        - none
+        - pending_approval
+        - pending_human_input
+        - terminal
+        - invalid_checkpoint
+      description: Machine-readable reason why a run is currently not resumable (or "none" if it is).
+
+    Checkpoint:
+      type: object
+      properties:
+        id:
+          type: string
+        runId:
+          type: string
+        nodeId:
+          type: string
+        checkpointType:
+          type: string
+        state:
+          type: object
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+      required: [id, runId, nodeId, checkpointType]
+
+    Approval:
+      type: object
+      properties:
+        id:
+          type: string
+        runId:
+          type: string
+        nodeId:
+          type: string
+        status:
+          type: string
+          enum: [pending, approved, rejected]
+        reason:
+          type: string
+        objective:
+          type: string
+          nullable: true
+        metadata:
+          type: object
+        actorId:
+          type: string
+          nullable: true
+        note:
+          type: string
+          nullable: true
+        requestedAt:
+          type: string
+          format: date-time
+          nullable: true
+        decidedAt:
+          type: string
+          format: date-time
+          nullable: true
+      required: [id, runId, nodeId, status, reason]
+
+    WorkflowRunNode:
+      type: object
+      properties:
+        id:
+          type: string
+        runId:
+          type: string
+        nodeId:
+          type: string
+        nodeType:
+          type: string
+        status:
+          $ref: "#/components/schemas/WorkflowNodeStatus"
+        output:
+          type: object
+          nullable: true
+        error:
+          type: string
+          nullable: true
+        waitingOn:
+          type: array
+          items:
+            type: string
+        startedAt:
+          type: string
+          format: date-time
+          nullable: true
+        completedAt:
+          type: string
+          format: date-time
+          nullable: true
+        checkpointRef:
+          type: string
+          nullable: true
+      required: [id, runId, nodeId, nodeType, status]
+
+    WorkflowExecutionSnapshot:
+      type: object
+      description: |
+        Authoritative execution snapshot returned by Python. TS projects this
+        into the database — it never invents these values.
+      properties:
+        status:
+          $ref: "#/components/schemas/WorkflowRunStatus"
+        nodes:
+          type: array
+          items:
+            $ref: "#/components/schemas/WorkflowRunNode"
+        checkpointId:
+          type: string
+          nullable: true
+        blockedNodeId:
+          type: string
+          nullable: true
+        resumabilityReason:
+          $ref: "#/components/schemas/WorkflowResumabilityReason"
+        error:
+          type: string
+          nullable: true
+      required: [status, nodes]
+
+    WorkflowRun:
+      type: object
+      properties:
+        id:
+          type: string
+        workflowId:
+          type: string
+        workflowVersion:
+          type: string
+        status:
+          $ref: "#/components/schemas/WorkflowRunStatus"
+        blockedNodeId:
+          type: string
+          nullable: true
+        resumabilityReason:
+          $ref: "#/components/schemas/WorkflowResumabilityReason"
+        lastCheckpointId:
+          type: string
+          nullable: true
+        resumableCheckpointId:
+          type: string
+          nullable: true
+        approvalState:
+          type: string
+          enum: [none, pending, approved, rejected]
+        requestedBy:
+          type: string
+        input:
+          type: object
+        error:
+          type: string
+          nullable: true
+        admittedAt:
+          type: string
+          format: date-time
+          nullable: true
+        startedAt:
+          type: string
+          format: date-time
+          nullable: true
+        completedAt:
+          type: string
+          format: date-time
+          nullable: true
+        failedAt:
+          type: string
+          format: date-time
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+        cancelState:
+          type: string
+          enum: [cancel_requested, cancelling, cancelled]
+          nullable: true
+        cancelRequestedAt:
+          type: string
+          format: date-time
+          nullable: true
+        stateLog:
+          type: array
+          items:
+            $ref: "#/components/schemas/StateLogEntry"
+        executorId:
+          type: string
+          nullable: true
+      required: [id, workflowId, workflowVersion, status, resumabilityReason]
+
+    WorkflowRunDetail:
+      allOf:
+        - $ref: "#/components/schemas/WorkflowRun"
+        - type: object
+          properties:
+            nodes:
+              type: array
+              items:
+                $ref: "#/components/schemas/WorkflowRunNode"
+            checkpoints:
+              type: array
+              items:
+                $ref: "#/components/schemas/Checkpoint"
+            approvals:
+              type: array
+              items:
+                $ref: "#/components/schemas/Approval"
+            resumability:
+              type: object
+              properties:
+                reason:
+                  $ref: "#/components/schemas/WorkflowResumabilityReason"
+                blockedNodeId:
+                  type: string
+                  nullable: true
+                canResume:
+                  type: boolean
+
+    WorkflowDefinition:
+      type: object
+      properties:
+        id:
+          type: string
+        version:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+        tags:
+          type: array
+          items:
+            type: string
+        owner:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+      required: [id, version, name]
+
+    CreateWorkflowPayload:
+      type: object
+      properties:
+        id:
+          type: string
+          minLength: 3
+        version:
+          type: string
+        name:
+          type: string
+          minLength: 1
+        description:
+          type: string
+        nodes:
+          type: array
+          items:
+            type: object
+        edges:
+          type: array
+          items:
+            type: object
+        tags:
+          type: array
+          items:
+            type: string
+        owner:
+          type: string
+          nullable: true
+      required: [id, name, nodes, edges]
+
+    WorkflowRunRequest:
+      type: object
+      properties:
+        workflowId:
+          type: string
+        workflowVersion:
+          type: string
+        input:
+          type: object
+        requestedBy:
+          type: string
+        correlationId:
+          type: string
+          nullable: true
+        idempotencyKey:
+          type: string
+          nullable: true
+      required: [workflowId]
+
+    WorkflowResumeRequest:
+      type: object
+      properties:
+        checkpointId:
+          type: string
+          nullable: true
+        completedNodes:
+          type: array
+          items:
+            type: object
+            properties:
+              nodeId:
+                type: string
+              name:
+                type: string
+              result:
+                type: object
+                nullable: true
+            required: [nodeId, name]
+
+    WorkflowRunAdmittedResponse:
+      type: object
+      properties:
+        runId:
+          type: string
+        workflowId:
+          type: string
+        status:
+          $ref: "#/components/schemas/WorkflowRunStatus"
+      required: [runId, workflowId, status]
+
+    CreateApprovalRequest:
+      type: object
+      properties:
+        runId:
+          type: string
+        nodeId:
+          type: string
+        reason:
+          type: string
+        objective:
+          type: string
+          nullable: true
+        metadata:
+          type: object
+      required: [runId, nodeId, reason]
+
+    ApprovalDecision:
+      type: object
+      properties:
+        approved:
+          type: boolean
+        actorId:
+          type: string
+          nullable: true
+        note:
+          type: string
+          nullable: true
+      required: [approved]
+
+    HumanInputPayload:
+      type: object
+      properties:
+        input:
+          type: object
+        actorId:
+          type: string
+          nullable: true
+      required: [input]
+
+    HumanInputAccepted:
+      type: object
+      properties:
+        runId:
+          type: string
+        nodeId:
+          type: string
+        status:
+          type: string
+          enum: [accepted]
+        continuationStatus:
+          $ref: "#/components/schemas/WorkflowRunStatus"
+        lastCheckpointId:
+          type: string
+          nullable: true
+      required: [runId, nodeId, status]
+
+
+    CancelResponse:
+      type: object
+      properties:
+        runId:
+          type: string
+        status:
+          type: string
+          enum: [cancelled, cancel_requested]
+        cancelledAt:
+          type: string
+          format: date-time
+      required: [runId, status]
+
+    WorkflowRunLease:
+      type: object
+      description: Executor ownership metadata for a workflow run
+      properties:
+        executorId:
+          type: string
+          nullable: true
+        leaseToken:
+          type: string
+          nullable: true
+        leaseExpiresAt:
+          type: string
+          format: date-time
+          nullable: true
+        heartbeatAt:
+          type: string
+          format: date-time
+          nullable: true
+        retryAttempt:
+          type: integer
+
+    StateLogEntry:
+      type: object
+      properties:
+        event:
+          type: string
+        at:
+          type: string
+          format: date-time
+        meta:
+          type: object
+          nullable: true
+      required: [event, at]
+
+    OrchestratorError:
+      type: object
+      properties:
+        error:
+          type: string
+        code:
+          type: string
+        category:
+          type: string
+        retryable:
+          type: boolean
+        correlationId:
+          type: string
+          nullable: true
+      required: [error, code, category, retryable]
+
+    ValidationError:
+      type: object
+      properties:
+        error:
+          type: string
+        details:
+          type: array
+          items:
+            type: object
+            properties:
+              field:
+                type: string
+              message:
+                type: string
+            required: [field, message]
+      required: [error, details]

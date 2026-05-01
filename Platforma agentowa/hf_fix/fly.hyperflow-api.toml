@@ -1,0 +1,34 @@
+app = "hyperflow-api"
+primary_region = "ams"
+
+[build]
+  dockerfile = "artifacts/api-server/Dockerfile"
+
+[env]
+  PORT = "8080"
+  NODE_ENV = "production"
+  HARDENED_MODE = "true"
+  HYPERFLOW_CORE_URL = "http://hyperflow-core.internal:8000"
+  TRUST_PROXY = "1"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_start_machines = true
+  auto_stop_machines = false
+  min_machines_running = 1
+  processes = ["app"]
+
+  [http_service.concurrency]
+    type = "requests"
+    soft_limit = 250
+    hard_limit = 300
+
+  [[http_service.checks]]
+    type = "http"
+    method = "GET"
+    path = "/api/livez"
+    interval = "15s"
+    timeout = "5s"
+    grace_period = "20s"
+    protocol = "http"

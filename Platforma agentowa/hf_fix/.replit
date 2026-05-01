@@ -1,0 +1,79 @@
+modules = ["nodejs-24", "python-3.12", "postgresql-16"]
+
+[deployment]
+router = "application"
+deploymentTarget = "autoscale"
+
+[deployment.postBuild]
+args = ["pnpm", "store", "prune"]
+env = { "CI" = "true" }
+
+[workflows]
+runButton = "Project"
+
+[[workflows.workflow]]
+name = "Project"
+mode = "parallel"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "Platform Shell"
+
+[[workflows.workflow]]
+name = "Platform Shell"
+author = "agent"
+
+[workflows.workflow.metadata]
+outputType = "console"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "set -euo pipefail; : ${API_TOKEN:?API_TOKEN must be set}; : ${DATABASE_URL:?DATABASE_URL must be set}; : ${HYPERFLOW_CORE_TOKEN:?HYPERFLOW_CORE_TOKEN must be set}; pnpm --filter @workspace/db run push; HYPERFLOW_SCANNER_ALLOWED_HOSTS=github.com,gitlab.com,bitbucket.org HOST=127.0.0.1 PORT=8000 python3 main.py & CORE_PID=$!; trap 'kill $CORE_PID 2>/dev/null || true' EXIT; for i in $(seq 1 60); do if curl -sf -H \"X-API-Key: $HYPERFLOW_CORE_TOKEN\" http://127.0.0.1:8000/v1/health >/dev/null 2>&1; then echo \"Hyperflow Core ready\"; break; fi; sleep 1; done; pnpm --filter @workspace/api-server run build && PORT=8099 NODE_ENV=production HARDENED_MODE=true HYPERFLOW_CORE_URL=http://127.0.0.1:8000 pnpm --filter @workspace/api-server run start"
+waitForPort = 8099
+
+[agent]
+stack = "PNPM_WORKSPACE"
+expertMode = true
+integrations = ["github:1.0.0"]
+
+[postMerge]
+path = "scripts/post-merge.sh"
+timeoutMs = 20000
+
+[nix]
+channel = "stable-25_05"
+packages = ["libxcrypt"]
+
+[userenv]
+
+[userenv.shared]
+API_TOKEN = "dev-local-token-3wrupyde"
+HYPERFLOW_CORE_TOKEN = "dev-core-token-rkugvh08"
+
+[userenv.development]
+CORS_ORIGIN = "*"
+
+[[ports]]
+localPort = 8080
+externalPort = 8080
+
+[[ports]]
+localPort = 8081
+externalPort = 8081
+
+[[ports]]
+localPort = 8082
+externalPort = 3002
+
+[[ports]]
+localPort = 8099
+externalPort = 8099
+
+[[ports]]
+localPort = 24224
+externalPort = 80
+
+[[ports]]
+localPort = 24225
+externalPort = 3001
