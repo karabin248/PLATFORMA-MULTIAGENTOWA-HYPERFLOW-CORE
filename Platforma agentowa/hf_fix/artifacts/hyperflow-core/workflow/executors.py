@@ -4,6 +4,7 @@ import ast
 import asyncio
 import json
 import os
+import re
 from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Sequence, Tuple
 
@@ -20,6 +21,10 @@ from .contracts import (
     WorkflowRunRequest,
 )
 from .graph import WorkflowGraph, build_graph
+# C-1 defence-in-depth: import the allowlist validator so that even if the
+# openrouter.py call_model() check is somehow bypassed at the call-site, the
+# hint is validated here before it reaches run_edde → call_model.
+from openrouter import _validate_model_hint as _openrouter_validate_model_hint
 
 RunEddeCallable = Callable[..., Awaitable[Dict[str, Any]]]
 
@@ -106,6 +111,19 @@ def _build_routing(step: AgentStep) -> Dict[str, Any]:
         raise ValueError(f"Agent '{agent_ref.get('id', step.id)}' missing required capabilities: {', '.join(missing)}")
     run_policy = dict(agent_ref.get("runPolicy") or {})
     model_hint_raw = run_policy.get("modelHint") or ""
+
+    # C-1 FIX (defence-in-depth): validate the model hint at the routing layer
+    # before it propagates downstream to run_edde → call_model.  The primary
+    # enforcement is in openrouter.py::call_model via _validate_model_hint, but
+    # catching it here surfaces the error earlier with a clearer node-level
+    # message and prevents the hint from entering the prompt preamble.
+    try:
+        validated_hint = _openrouter_validate_model_hint(model_hint_raw or None)
+    except ValueError as exc:
+        raise ValueError(
+            f"Agent '{agent_ref.get('id', step.id)}' supplied an invalid modelHint: {exc}"
+        ) from exc
+
     return {
         "agentId": agent_ref.get("id", step.id),
         "agentVersion": agent_ref.get("version", "1.0.0"),
@@ -113,13 +131,49 @@ def _build_routing(step: AgentStep) -> Dict[str, Any]:
         "availableCapabilities": available_capabilities,
         "requiredCapabilities": list(step.requiredCapabilities),
         "runtimeMode": run_policy.get("runtimeMode", "standard"),
-        "modelHint": model_hint_raw.strip() or None,   # None if absent/empty
+        "modelHint": validated_hint,   # None if absent/empty/invalid
         "safeConstraintProfile": run_policy.get("safeConstraintProfile"),
         # runtimeMode and safeConstraintProfile have no execution logic keyed on them.
         # They are forwarded to the prompt preamble only. modelHint IS executable.
         "advisoryFields": ["runtimeMode", "safeConstraintProfile"],
         "capabilityCheck": {"satisfied": True, "missing": []},
     }
+
+
+# ---------------------------------------------------------------------------
+# H-1 FIX: prompt-injection sanitisation helpers
+#
+# The routing preamble is serialised into the LLM prompt before step.prompt.
+# Any user-controlled free-text fields in the preamble are an injection
+# surface.  We enforce two rules:
+#
+#   1. Only whitelisted ENUM-like fields from handoffContract are included
+#      (schemaVersion, intent, targetHint, artifactKeys, successSignal).
+#      openQuestions, note, and any other free-text fields are EXCLUDED.
+#
+#   2. Whitelisted string fields are validated against a strict safe-string
+#      pattern before inclusion.  Strings that fail validation are replaced
+#      with a sanitised placeholder so the preamble structure is preserved
+#      but the injected content is discarded.
+#
+# This approach is conservative: when in doubt, exclude.
+# ---------------------------------------------------------------------------
+
+_PREAMBLE_SAFE_STRING_RE = re.compile(r'^[a-zA-Z0-9_\-/.: ]{0,200}$')
+
+
+def _safe_preamble_str(value: Any, fallback: str = "") -> str:
+    """Return value if it passes the safe-string check, else fallback."""
+    if not isinstance(value, str):
+        return fallback
+    return value if _PREAMBLE_SAFE_STRING_RE.match(value) else fallback
+
+
+def _sanitise_capability(cap: Any) -> Optional[str]:
+    """Return a capability string only if it passes the safe-string check."""
+    if not isinstance(cap, str):
+        return None
+    return cap if _PREAMBLE_SAFE_STRING_RE.match(cap) else None
 
 
 def _build_agent_prompt(step: AgentStep, routing: Dict[str, Any], upstream_handoffs: List[Dict[str, Any]]) -> str:
@@ -131,28 +185,67 @@ def _build_agent_prompt(step: AgentStep, routing: Dict[str, Any], upstream_hando
     )
     if not has_routing_context:
         return step.prompt
+
+    # H-1 FIX: Only structured, enum-like fields are included in the preamble.
+    # Free-text fields (openQuestions, note, metadata, etc.) are intentionally
+    # excluded — they are the primary prompt-injection surface.
+    #
+    # Upstream handoffs: include only structural identity fields (fromNodeId,
+    # intent, targetHint) as safe-validated strings.  Artifact keys are listed
+    # by name only (no values).  openQuestions is excluded entirely.
+    safe_capabilities = [
+        c for c in (
+            _sanitise_capability(cap)
+            for cap in routing.get("requiredCapabilities", [])
+        )
+        if c is not None
+    ]
+
+    handoff_contract_summary: Optional[Dict[str, Any]] = None
+    if step.handoffContract:
+        raw = step.handoffContract.model_dump()
+        # Only include non-free-text contract fields
+        handoff_contract_summary = {
+            "schemaVersion": _safe_preamble_str(raw.get("schemaVersion"), "1.0"),
+            "intent":        _safe_preamble_str(raw.get("intent"), "node_result"),
+            "targetHint":    _safe_preamble_str(raw.get("targetHint"), ""),
+            # artifactKeys are structural identifiers — safe to list
+            "artifactKeys":  [
+                k for k in (raw.get("artifactKeys") or [])
+                if isinstance(k, str) and _PREAMBLE_SAFE_STRING_RE.match(k)
+            ],
+            "successSignal": _safe_preamble_str(raw.get("successSignal"), ""),
+            # openQuestions intentionally excluded — free-text injection surface
+        }
+
+    upstream_summary = [
+        {
+            "fromNodeId": _safe_preamble_str(h.get("fromNodeId"), ""),
+            "intent":     _safe_preamble_str(h.get("intent"), ""),
+            "targetHint": _safe_preamble_str(h.get("targetHint"), ""),
+            # artifacts: include only the keys (structural), not the values (data)
+            "artifactKeys": [
+                k for k in (h.get("artifacts") or {}).keys()
+                if isinstance(k, str) and _PREAMBLE_SAFE_STRING_RE.match(k)
+            ],
+            # openQuestions intentionally excluded — free-text injection surface
+        }
+        for h in upstream_handoffs
+    ]
+
     preamble = {
         "routing": {
-            "role": routing.get("role"),
-            "runtimeMode": routing.get("runtimeMode"),
-            "runtimeModeAdvisory": True,            # no execution logic — prompt context only
-            "modelHint": routing.get("modelHint"),  # executable — controls call_model()
-            "safeConstraintProfile": routing.get("safeConstraintProfile"),
-            "safeConstraintProfileAdvisory": True,  # no enforcement logic — prompt context only
-            "requiredCapabilities": routing.get("requiredCapabilities", []),
+            "role":                          _safe_preamble_str(routing.get("role"), "assistant"),
+            "runtimeMode":                   _safe_preamble_str(routing.get("runtimeMode"), "standard"),
+            "runtimeModeAdvisory":           True,
+            "modelHint":                     routing.get("modelHint"),  # already validated in _build_routing
+            "safeConstraintProfile":         _safe_preamble_str(routing.get("safeConstraintProfile") or "", ""),
+            "safeConstraintProfileAdvisory": True,
+            "requiredCapabilities":          safe_capabilities,
         },
-        "advisoryFields": ["runtimeMode", "safeConstraintProfile"],
-        "handoffContract": step.handoffContract.model_dump() if step.handoffContract else None,
-        "upstreamHandoffs": [
-            {
-                "fromNodeId": handoff.get("fromNodeId"),
-                "intent": handoff.get("intent"),
-                "targetHint": handoff.get("targetHint"),
-                "artifacts": handoff.get("artifacts", {}),
-                "openQuestions": handoff.get("openQuestions", []),
-            }
-            for handoff in upstream_handoffs
-        ],
+        "advisoryFields":  ["runtimeMode", "safeConstraintProfile"],
+        "handoffContract": handoff_contract_summary,
+        "upstreamHandoffs": upstream_summary,
     }
     return "[HYPERFLOW ROUTING CONTEXT]\n" + json.dumps(preamble, ensure_ascii=False, sort_keys=True) + "\n\n" + step.prompt
 
@@ -246,11 +339,43 @@ async def _execute_tool(step: ToolStep, *, state: Dict[str, Any]) -> Dict[str, A
 
 async def _execute_condition(step: ConditionStep, *, state: Dict[str, Any]) -> Dict[str, Any]:
     started = _now_iso()
+
+    # H-2 / M-1 FIX: The condition expression context must NOT expose full
+    # node result payloads.  Providing state["node_results"] verbatim allows
+    # callers who control completed_nodes to inject arbitrary values that
+    # downstream condition expressions then treat as authoritative (privilege
+    # escalation via crafted resume payload).  It also allows expressions to
+    # extract sensitive data from prior LLM outputs as a side-channel.
+    #
+    # We replace the full result dict with a narrow projection that contains:
+    #   - "status": the node's terminal status string (scalar)
+    #   - "ok": convenience boolean — True when status is "completed"/"succeeded"
+    #
+    # Condition expressions should branch on STATUS, not on payload content.
+    # If a workflow genuinely needs payload routing, use a tool step with
+    # action="extract_field" and expose only the specific scalar field needed.
+    def _narrow_result(raw: Any) -> Dict[str, Any]:
+        if isinstance(raw, dict):
+            status_val = str(raw.get("status", "completed"))
+        else:
+            # raw is the raw node result, not a node envelope — treat as completed
+            status_val = "completed"
+        return {
+            "status": status_val,
+            "ok": status_val in {"completed", "succeeded"},
+        }
+
+    narrow_results = {
+        node_id: _narrow_result(result)
+        for node_id, result in state["node_results"].items()
+    }
+
     context = {
-        "input": step.input,
-        "memory": state["memory"],
-        "results": state["node_results"],
-        "handoffs": state.get("node_handoffs", {}),
+        "input":   step.input,
+        "memory":  state["memory"],
+        "results": narrow_results,
+        # "handoffs" intentionally excluded — full handoff payloads are a
+        # data-exfiltration surface via side-channel branch selection.
     }
     raw = _safe_eval(step.expression, context)
     branches = _normalize_condition_result(raw)
