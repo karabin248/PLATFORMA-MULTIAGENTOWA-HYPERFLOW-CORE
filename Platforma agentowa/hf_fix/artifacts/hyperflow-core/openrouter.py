@@ -22,6 +22,8 @@ from __future__ import annotations
 
 import asyncio
 import os
+import random
+import re
 from typing import Optional
 
 import httpx
@@ -81,6 +83,72 @@ def _max_retries() -> int:
         return 2
 
 
+# ---------------------------------------------------------------------------
+# C-1 FIX: model hint allowlist
+#
+# HYPERFLOW_ALLOWED_MODEL_HINTS is a comma-separated list of permitted model
+# identifiers (e.g. "openai/gpt-4o-mini,openai/gpt-4o").  When set, any hint
+# outside the list is rejected before the API call.  When absent, all hints
+# are permitted — existing behaviour is preserved — but a startup warning
+# prompts operators to configure the allowlist before production exposure.
+#
+# The format guard (regex) rejects injected or malformed strings regardless
+# of whether an explicit allowlist is configured.
+# ---------------------------------------------------------------------------
+
+_MODEL_HINT_FORMAT_RE = re.compile(r'^[a-zA-Z0-9_\-/.:]+$')
+_MODEL_HINT_MAX_LEN = 120
+
+
+def _load_model_hint_allowlist() -> frozenset:
+    raw = os.environ.get("HYPERFLOW_ALLOWED_MODEL_HINTS", "").strip()
+    if not raw:
+        return frozenset()
+    return frozenset(e.strip() for e in raw.split(",") if e.strip())
+
+
+_MODEL_HINT_ALLOWLIST: frozenset = _load_model_hint_allowlist()
+if not _MODEL_HINT_ALLOWLIST:
+    import logging as _logging
+    _logging.getLogger("hyperflow.core").warning(
+        "HYPERFLOW_ALLOWED_MODEL_HINTS is not set. "
+        "Any model hint supplied by callers will be accepted. "
+        "Set this env var in production to restrict model selection to an approved list."
+    )
+
+
+def _validate_model_hint(hint: Optional[str]) -> Optional[str]:
+    """Validate and return a model hint, or raise ValueError if disallowed.
+
+    Rejects hints that:
+      - Contain characters outside the safe format allowlist (alphanumerics,
+        hyphens, underscores, slashes, dots, colons).
+      - Exceed _MODEL_HINT_MAX_LEN characters.
+      - Are not in HYPERFLOW_ALLOWED_MODEL_HINTS (when that list is configured).
+
+    Returns None when hint is None or whitespace-only (treated as absent).
+    """
+    if not hint or not hint.strip():
+        return None
+    hint = hint.strip()
+    if len(hint) > _MODEL_HINT_MAX_LEN:
+        raise ValueError(
+            f"Model hint is too long ({len(hint)} chars, max {_MODEL_HINT_MAX_LEN}): {hint!r}"
+        )
+    if not _MODEL_HINT_FORMAT_RE.match(hint):
+        raise ValueError(
+            f"Model hint contains disallowed characters: {hint!r}. "
+            "Only alphanumerics, hyphens, underscores, forward-slashes, dots, "
+            "and colons are permitted."
+        )
+    if _MODEL_HINT_ALLOWLIST and hint not in _MODEL_HINT_ALLOWLIST:
+        raise ValueError(
+            f"Model hint {hint!r} is not in the allowed list. "
+            f"Permitted hints: {sorted(_MODEL_HINT_ALLOWLIST)}"
+        )
+    return hint
+
+
 async def _get_client(timeout: float) -> httpx.AsyncClient:
     """Reuse a process-local HTTP client so repeated LLM calls share a pool.
 
@@ -126,11 +194,18 @@ async def call_model(
         OpenRouterUnavailable on persistent failure.
     """
     api_key = _api_key()
-    # model_hint takes priority over the env-configured default.
-    # An empty string or whitespace-only hint is treated as absent.
-    model = (model_hint.strip() if model_hint and model_hint.strip() else None) or _model()
+
+    # C-1 FIX: validate and allowlist-check the model hint before it reaches
+    # the OpenRouter payload.  _validate_model_hint raises ValueError (which
+    # the caller maps to OpenRouterUnavailable) on format violations or
+    # non-allowlisted values.  This is the single enforcement point for C-1.
+    try:
+        validated_hint = _validate_model_hint(model_hint)
+    except ValueError as exc:
+        raise OpenRouterUnavailable(f"Model hint rejected: {exc}") from exc
+
+    model = validated_hint or _model()
     retries = _max_retries()
-    backoff = 1.0
 
     user_message = (
         f"Intent: {intent}\n"
@@ -157,6 +232,14 @@ async def call_model(
 
     last_exc: Optional[Exception] = None
 
+    # L-4 FIX: full-jitter backoff prevents thundering-herd on concurrent 429s.
+    # sleep = random.uniform(0, min(cap, base * 2**attempt))
+    _BACKOFF_BASE = 1.0
+    _BACKOFF_CAP = 30.0
+
+    def _jittered_sleep_s(attempt: int) -> float:
+        return random.uniform(0.0, min(_BACKOFF_CAP, _BACKOFF_BASE * (2 ** attempt)))
+
     client = await _get_client(_timeout())
     for attempt in range(retries + 1):
         try:
@@ -167,7 +250,7 @@ async def call_model(
             )
             # Retry on transient server-side errors
             if resp.status_code in _RETRY_STATUSES and attempt < retries:
-                await asyncio.sleep(backoff * (2 ** attempt))
+                await asyncio.sleep(_jittered_sleep_s(attempt))
                 continue
             resp.raise_for_status()
             data = resp.json()
@@ -187,14 +270,14 @@ async def call_model(
                 f"OpenRouter HTTP {exc.response.status_code}: {exc.response.text[:200]}"
             )
             if attempt < retries:
-                await asyncio.sleep(backoff * (2 ** attempt))
+                await asyncio.sleep(_jittered_sleep_s(attempt))
                 continue
             raise last_exc from exc
 
         except httpx.RequestError as exc:
             last_exc = OpenRouterUnavailable(f"OpenRouter request error: {exc}")
             if attempt < retries:
-                await asyncio.sleep(backoff * (2 ** attempt))
+                await asyncio.sleep(_jittered_sleep_s(attempt))
                 continue
             raise last_exc from exc
 
