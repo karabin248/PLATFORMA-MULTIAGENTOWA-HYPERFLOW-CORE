@@ -11,10 +11,51 @@ from __future__ import annotations
 
 import json
 import os
+import hashlib
+import logging
 from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Deque
+
+_logger = logging.getLogger("hyperflow.memory.store")
+_write_failures: dict[str, int] = {}
+
+
+def _rotation_threshold_bytes() -> int:
+    try:
+        mb = float(os.environ.get("HYPERFLOW_STORAGE_MAX_MB", "5"))
+    except ValueError:
+        mb = 5.0
+    return max(1, int(mb * 1024 * 1024))
+
+
+def _alert_threshold() -> int:
+    try:
+        return max(1, int(os.environ.get("HYPERFLOW_STORAGE_ALERT_THRESHOLD", "10")))
+    except ValueError:
+        return 10
+
+
+def _rotate_if_needed(path: Path) -> None:
+    if not path.exists():
+        return
+    if path.stat().st_size < _rotation_threshold_bytes():
+        return
+    backup = path.with_suffix(path.suffix + ".1")
+    try:
+        if backup.exists():
+            backup.unlink()
+        path.replace(backup)
+    except OSError:
+        pass
+
+
+def _prompt_token(prompt: str) -> str:
+    if os.environ.get("HYPERFLOW_PERSIST_PROMPTS", "false").strip().lower() == "true":
+        return prompt[:120]
+    digest = hashlib.sha256(prompt.encode("utf-8")).hexdigest()
+    return f"sha256:{digest}"
 
 # ---------------------------------------------------------------------------
 # Storage root
@@ -35,11 +76,22 @@ def _trace_file() -> Path:
 
 def _safe_write(path: Path, record: dict[str, Any]) -> None:
     """Best-effort append — never raises, never breaks the run."""
+    key = str(path)
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
+        _rotate_if_needed(path)
         with path.open("a", encoding="utf-8") as f:
             f.write(json.dumps(record, ensure_ascii=False, default=str) + "\n")
-    except OSError:
+        _write_failures[key] = 0
+    except Exception:
+        count = _write_failures.get(key, 0) + 1
+        _write_failures[key] = count
+        if count >= _alert_threshold():
+            _logger.critical(
+                "Persistent JSONL write failures for %s (count=%s)",
+                key,
+                count,
+            )
         pass
 
 
@@ -77,7 +129,7 @@ def save_trace(
     record = {
         "timestamp":                datetime.now(timezone.utc).isoformat(),
         "run_id":                   run_id,
-        "prompt_preview":           prompt[:120],
+        "prompt_token":             _prompt_token(prompt),
         "intent":                   intent,
         "mode":                     mode,
         "mps_level":                mps_context.get("level"),

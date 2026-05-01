@@ -129,24 +129,46 @@ app.add_middleware(
 # ---------------------------------------------------------------------------
 
 _CORE_TOKEN: str = os.environ.get("HYPERFLOW_CORE_TOKEN", "").strip()
-_RUNTIME_ENV: str = (
-    os.environ.get("NODE_ENV")
-    or os.environ.get("HYPERFLOW_ENV")
+
+# H-4 FIX: Fail-closed auth default.
+#
+# BEFORE (vulnerable): if none of NODE_ENV / HYPERFLOW_ENV / ENV were set,
+# _RUNTIME_ENV defaulted to "development" and the token check was silently
+# skipped.  A k8s pod that omitted all three env vars would start with NO
+# internal token auth, exposing all execution endpoints to any in-cluster
+# caller.
+#
+# AFTER (safe): HYPERFLOW_ENV=development (or equivalent dev values) must be
+# set EXPLICITLY to allow tokenless operation.  Absence of all three vars is
+# treated as production/unknown — the token IS required.  This is fail-closed:
+# a misconfigured deployment refuses to start rather than starting open.
+_EXPLICIT_ENV: str = (
+    os.environ.get("HYPERFLOW_ENV")
+    or os.environ.get("NODE_ENV")
     or os.environ.get("ENV")
-    or "development"
+    or ""          # ← empty string, NOT "development" — absence means unknown
 ).strip().lower()
 
+_DEV_ENVS: frozenset = frozenset({"development", "dev", "local", "test", "testing"})
+_RUNTIME_ENV: str = _EXPLICIT_ENV if _EXPLICIT_ENV else "production"
+
 if not _CORE_TOKEN:
-    if _RUNTIME_ENV not in {"development", "dev", "local", "test", "testing"}:
+    if _RUNTIME_ENV not in _DEV_ENVS:
         core_logger.critical(
-            "HYPERFLOW_CORE_TOKEN is required when runtime env is %r. "
+            "HYPERFLOW_CORE_TOKEN is required when runtime env is %r "
+            "(resolved from HYPERFLOW_ENV / NODE_ENV / ENV — none were set, "
+            "so the environment is treated as production). "
             "Refusing to start without internal token auth.",
             _RUNTIME_ENV,
         )
-        raise RuntimeError("HYPERFLOW_CORE_TOKEN must be set outside development/test mode")
+        raise RuntimeError(
+            "HYPERFLOW_CORE_TOKEN must be set in production. "
+            "To allow tokenless operation set HYPERFLOW_ENV=development explicitly."
+        )
     core_logger.warning(
         "HYPERFLOW_CORE_TOKEN is not set — Python core is running WITHOUT "
-        "internal token auth. This is allowed only for development/test mode."
+        "internal token auth. Allowed only because HYPERFLOW_ENV=%r (dev/test mode).",
+        _RUNTIME_ENV,
     )
 
 

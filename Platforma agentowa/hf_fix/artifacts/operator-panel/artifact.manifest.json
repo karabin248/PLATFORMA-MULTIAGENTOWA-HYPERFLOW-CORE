@@ -1,0 +1,6 @@
+{
+  "deployable": true,
+  "owner": "platform-ui",
+  "runtime": "node",
+  "entrypoint": "src/main.tsx"
+}

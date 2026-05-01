@@ -209,19 +209,26 @@ test("C4: H2 bug — passing whole error object as string hits default branch wi
 
 // ─── D. IDEMPOTENCY ──────────────────────────────────────────────────────────
 
-test("D1: idempotent admission contract — same key returns same run", () => {
-  // Behavioral contract verified by the atomic onConflictDoNothing() pattern
+test("D1: idempotent admission is scoped per workflow", () => {
+  // Behavioral contract for unique(workflow_id, idempotency_key)
   const admitted = new Map();
-  function admit(key, runId) {
-    if (admitted.has(key)) return { hit: true, runId: admitted.get(key) };
-    admitted.set(key, runId);
+  function admit(workflowId, key, runId) {
+    const dedupeKey = `${workflowId}:${key}`;
+    if (admitted.has(dedupeKey)) return { hit: true, runId: admitted.get(dedupeKey) };
+    admitted.set(dedupeKey, runId);
     return { hit: false, runId };
   }
-  const first = admit("key-123", "run-1");
-  const second = admit("key-123", "run-2");
-  assert.equal(first.hit, false, "First admission must succeed");
-  assert.equal(second.hit, true, "Second admission must be a hit");
-  assert.equal(second.runId, "run-1", "Hit must return the original run, not a new one");
+
+  const wf1First = admit("wf-1", "key-123", "run-1");
+  const wf1Second = admit("wf-1", "key-123", "run-2");
+  const wf2First = admit("wf-2", "key-123", "run-3");
+
+  assert.equal(wf1First.hit, false, "First admission in workflow 1 must succeed");
+  assert.equal(wf1Second.hit, true, "Second admission in same workflow must be a hit");
+  assert.equal(wf1Second.runId, "run-1", "Same-workflow hit must return the original run");
+
+  assert.equal(wf2First.hit, false, "Same key in different workflow must create a new run");
+  assert.equal(wf2First.runId, "run-3", "Different-workflow admission must keep its new run id");
 });
 
 test("D2: no idempotency key → fresh run every time (no constraints)", () => {
