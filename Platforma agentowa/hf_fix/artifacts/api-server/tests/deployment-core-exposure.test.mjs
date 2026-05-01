@@ -34,3 +34,16 @@ test("core service has no host port mapping", () => {
     }
   }
 });
+
+test("production compose enforces core token and disables local-dev bypass", () => {
+  const compose = fs.readFileSync(path.resolve(__dirname, "../../../docker-compose.yml"), "utf8");
+  assert.match(compose, /HYPERFLOW_ENV:\s*"production"/);
+  assert.match(compose, /HYPERFLOW_CORE_TOKEN:\s*\$\{HYPERFLOW_CORE_TOKEN:-\}/);
+  assert.doesNotMatch(compose, /HYPERFLOW_LOCAL_DEV_MODE:\s*"?(1|true|yes|on)"?/i);
+});
+
+test("fly core app is private and not publicly routable", () => {
+  const flyCore = fs.readFileSync(path.resolve(__dirname, "../../../fly.hyperflow-core.toml"), "utf8");
+  assert.match(flyCore, /HOST\s*=\s*"fly-local-6pn"/);
+  assert.doesNotMatch(flyCore, /^\[http_service\]/m, "Core Fly config must not expose a public http_service");
+});

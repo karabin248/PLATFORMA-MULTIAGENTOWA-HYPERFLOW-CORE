@@ -135,18 +135,19 @@ _RUNTIME_ENV: str = (
     or os.environ.get("ENV")
     or "development"
 ).strip().lower()
+_LOCAL_DEV_MODE: bool = os.environ.get("HYPERFLOW_LOCAL_DEV_MODE", "").strip().lower() in {"1", "true", "yes", "on"}
 
 if not _CORE_TOKEN:
-    if _RUNTIME_ENV not in {"development", "dev", "local", "test", "testing"}:
+    if not _LOCAL_DEV_MODE:
         core_logger.critical(
-            "HYPERFLOW_CORE_TOKEN is required when runtime env is %r. "
-            "Refusing to start without internal token auth.",
+            "HYPERFLOW_CORE_TOKEN is required unless explicit local dev mode is enabled. "
+            "Refusing to start without internal token auth (runtime env: %r).",
             _RUNTIME_ENV,
         )
-        raise RuntimeError("HYPERFLOW_CORE_TOKEN must be set outside development/test mode")
+        raise RuntimeError("HYPERFLOW_CORE_TOKEN must be set unless HYPERFLOW_LOCAL_DEV_MODE=true")
     core_logger.warning(
         "HYPERFLOW_CORE_TOKEN is not set — Python core is running WITHOUT "
-        "internal token auth. This is allowed only for development/test mode."
+        "internal token auth because HYPERFLOW_LOCAL_DEV_MODE is enabled."
     )
 
 
