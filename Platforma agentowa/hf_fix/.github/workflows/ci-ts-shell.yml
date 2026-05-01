@@ -3,18 +3,24 @@ name: TypeScript Shell CI
 on:
   push:
     paths:
+      - 'artifacts/**/artifact.manifest.json'
       - 'artifacts/api-server/**'
       - 'artifacts/operator-panel/**'
       - 'lib/**'
       - 'packages/**'
       - 'scripts/generate_provenance_manifest.py'
+      - 'scripts/select_artifacts.py'
+      - 'build-targets.json'
   pull_request:
     paths:
+      - 'artifacts/**/artifact.manifest.json'
       - 'artifacts/api-server/**'
       - 'artifacts/operator-panel/**'
       - 'lib/**'
       - 'packages/**'
       - 'scripts/generate_provenance_manifest.py'
+      - 'scripts/select_artifacts.py'
+      - 'build-targets.json'
 
 permissions:
   contents: read
@@ -36,10 +42,21 @@ jobs:
           python-version: '3.12'
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
-      - name: Typecheck API Server
-        run: pnpm --filter @workspace/api-server run typecheck
-      - name: Typecheck Operator Panel
-        run: pnpm --filter @workspace/operator-panel run typecheck
+      - name: Resolve deployable Node artifact targets
+        id: node_targets
+        run: |
+          TARGETS=$(python3 scripts/select_artifacts.py --deployable-only --runtime node --format lines)
+          echo "targets<<EOF" >> "$GITHUB_OUTPUT"
+          echo "$TARGETS" >> "$GITHUB_OUTPUT"
+          echo "EOF" >> "$GITHUB_OUTPUT"
+      - name: Typecheck deployable Node artifacts
+        run: |
+          while IFS= read -r target; do
+            [ -n "$target" ] || continue
+            pnpm --filter "@workspace/${target}" run typecheck
+          done <<'EOF'
+          ${{ steps.node_targets.outputs.targets }}
+          EOF
       - name: Run merged-system integration tests
         run: pnpm --filter @workspace/api-server run test:integration
       - name: Generate API server SBOM

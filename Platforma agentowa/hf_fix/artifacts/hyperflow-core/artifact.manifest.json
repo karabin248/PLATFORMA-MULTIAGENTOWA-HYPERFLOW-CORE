@@ -1,0 +1,6 @@
+{
+  "deployable": true,
+  "owner": "platform-core",
+  "runtime": "python",
+  "entrypoint": "main.py"
+}
