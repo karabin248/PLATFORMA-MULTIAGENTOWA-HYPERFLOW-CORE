@@ -9,13 +9,10 @@
 export type AgentRunStatus =
   (typeof AgentRunStatus)[keyof typeof AgentRunStatus];
 
-// M-6: added waiting_approval + waiting_input for workflow-backed agent runs
 export const AgentRunStatus = {
   queued: "queued",
   running: "running",
   completed: "completed",
   failed: "failed",
-  waiting_approval: "waiting_approval",
-  waiting_input: "waiting_input",
   cancelled: "cancelled",
 } as const;

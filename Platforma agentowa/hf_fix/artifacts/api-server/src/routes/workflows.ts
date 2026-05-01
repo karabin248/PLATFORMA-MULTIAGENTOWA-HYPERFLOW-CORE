@@ -1,4 +1,5 @@
 import { Router, type Request, type Response } from "express";
+import { z } from "zod";
 import { and, desc, eq } from "drizzle-orm";
 import { randomUUID } from "crypto";
 import {
@@ -20,10 +21,13 @@ import { validateResumeCheckpoint } from "../lib/resumeValidator";
 import { evaluateResumeEligibility } from "../lib/resumeEligibility";
 import { projectExecutionSnapshot, projectContinuationSnapshot, appendStateLogEvent, deriveResumability, deriveOperatorSummary } from "../lib/workflowProjection";
 import { requestCancellation } from "../lib/workflowExecutor";
+import { assertResponseShape } from "../lib/contractValidation";
 // The live resume route is implemented inline below with proper scoped predicates.
 // The former resumeWorkflowHandler.js has been moved to tests/harness/ (test-only).
 
 const router = Router();
+const WorkflowRunAdmissionResponse = z.object({ runId: z.string(), workflowId: z.string(), status: z.enum(["queued", "running", "completed", "failed", "cancelled"]), message: z.string().optional() });
+const WorkflowRunDetailResponse = z.object({ id: z.string(), status: z.enum(["queued", "running", "completed", "failed", "cancelled"]) }).passthrough();
 
 // Resume semantics live in dedicated helpers — see resumeEligibility.ts and
 // workflowProjection.ts. The route here only orchestrates: it loads run
@@ -212,12 +216,12 @@ router.post("/workflows/run", async (req: Request, res: Response) => {
     // The executor polls for queued runs, acquires leases, calls Python, and projects results.
     await appendStateLogEvent(runId, "admitted", { workflowId: found.id, requestedBy: body.requestedBy });
 
-    res.status(202).json({
+    res.status(202).json(assertResponseShape(WorkflowRunAdmissionResponse, {
       runId,
       workflowId: found.id,
       status: "queued",
       message: "Workflow run admitted. Execution is asynchronous — poll GET /workflow-runs/:id for status.",
-    });
+    }, "/workflows/run"));
   } catch (err) {
     const classified = classifyError(err, "run_workflow");
     logger.error({ err, category: classified.category }, "Failed to run workflow");
@@ -541,7 +545,7 @@ router.get("/workflow-runs/:id", async (req, res) => {
     blockedNodeId: resumability.blockedNodeId,
     resumableCheckpointId: run.resumableCheckpointId ?? null,
   };
-  res.json({
+  res.json(assertResponseShape(WorkflowRunDetailResponse, {
     ...run,
     resumability,
     blockingApproval,
@@ -553,7 +557,7 @@ router.get("/workflow-runs/:id", async (req, res) => {
     executionStory,
     nodes,
     checkpoints,
-  });
+  }, "/workflow-runs/:id"));
 });
 
 export default router;

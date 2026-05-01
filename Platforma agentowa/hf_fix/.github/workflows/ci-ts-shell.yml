@@ -42,6 +42,14 @@ jobs:
           python-version: '3.12'
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+      - name: Verify api-zod codegen is up to date
+        run: |
+          pnpm --filter @workspace/api-spec run codegen
+          git diff --exit-code lib/api-zod
+      - name: Typecheck API Server
+        run: pnpm --filter @workspace/api-server run typecheck
+      - name: Typecheck Operator Panel
+        run: pnpm --filter @workspace/operator-panel run typecheck
       - name: Resolve deployable Node artifact targets
         id: node_targets
         run: |
