@@ -8,8 +8,24 @@
 import * as zod from "zod";
 
 /**
- * Returns minimal health status
- * @summary Health check
+ * Returns minimal public liveness status
+ * @summary Liveness check
+ */
+export const LiveCheckResponse = zod.object({
+  status: zod.string(),
+});
+
+/**
+ * Returns authenticated dependency readiness status
+ * @summary Readiness check
+ */
+export const ReadinessCheckResponse = zod.object({
+  status: zod.string(),
+});
+
+/**
+ * Returns authenticated detailed server health status
+ * @summary Detailed health check
  */
 export const HealthCheckResponse = zod.object({
   status: zod.string(),
@@ -515,4 +531,425 @@ export const CancelRunResponse = zod.object({
   id: zod.string(),
   status: zod.string(),
   cancelledAt: zod.coerce.date(),
+});
+
+/**
+ * @summary List workflow definitions
+ */
+export const ListWorkflowsResponse = zod.object({
+  workflows: zod.array(
+    zod.object({
+      id: zod.string(),
+      version: zod.string(),
+      name: zod.string(),
+      description: zod.string().optional(),
+      tags: zod.array(zod.string()).optional(),
+      owner: zod.string().nullish(),
+      createdAt: zod.coerce.date().optional(),
+    }),
+  ),
+  total: zod.number(),
+});
+
+/**
+ * @summary Create a workflow definition
+ */
+export const createWorkflowBodyIdMin = 3;
+
+export const CreateWorkflowBody = zod.object({
+  id: zod.string().min(createWorkflowBodyIdMin),
+  version: zod.string().optional(),
+  name: zod.string().min(1),
+  description: zod.string().optional(),
+  nodes: zod.array(zod.object({}).passthrough()),
+  edges: zod.array(zod.object({}).passthrough()),
+  tags: zod.array(zod.string()).optional(),
+  owner: zod.string().nullish(),
+});
+
+/**
+ * @summary List workflow runs
+ */
+export const ListWorkflowRunsQueryParams = zod.object({
+  workflowId: zod.coerce.string().optional(),
+  status: zod
+    .enum([
+      "queued",
+      "running",
+      "waiting_approval",
+      "waiting_input",
+      "completed",
+      "failed",
+      "cancelled",
+    ])
+    .optional(),
+});
+
+export const ListWorkflowRunsResponse = zod.object({
+  runs: zod.array(
+    zod.object({
+      id: zod.string(),
+      workflowId: zod.string(),
+      workflowVersion: zod.string(),
+      status: zod
+        .enum([
+          "queued",
+          "running",
+          "waiting_approval",
+          "waiting_input",
+          "completed",
+          "failed",
+          "cancelled",
+        ])
+        .describe(
+          "Authoritative run status. Python is the sole authority for transitions.\nTS projects Python snapshots only.\n- waiting_approval: blocked on an approval gate node\n- waiting_input: blocked on a human-input node\n",
+        ),
+      blockedNodeId: zod.string().nullish(),
+      resumabilityReason: zod
+        .enum([
+          "none",
+          "pending_approval",
+          "pending_human_input",
+          "terminal",
+          "invalid_checkpoint",
+        ])
+        .describe(
+          'Machine-readable reason why a run is currently not resumable (or \"none\" if it is).',
+        ),
+      lastCheckpointId: zod.string().nullish(),
+      resumableCheckpointId: zod.string().nullish(),
+      approvalState: zod
+        .enum(["none", "pending", "approved", "rejected"])
+        .optional(),
+      requestedBy: zod.string().optional(),
+      input: zod.object({}).passthrough().optional(),
+      error: zod.string().nullish(),
+      admittedAt: zod.coerce.date().nullish(),
+      startedAt: zod.coerce.date().nullish(),
+      completedAt: zod.coerce.date().nullish(),
+      failedAt: zod.coerce.date().nullish(),
+      createdAt: zod.coerce.date().optional(),
+      cancelState: zod
+        .enum(["cancel_requested", "cancelling", "cancelled"])
+        .nullish(),
+      cancelRequestedAt: zod.coerce.date().nullish(),
+      stateLog: zod
+        .array(
+          zod.object({
+            event: zod.string(),
+            at: zod.coerce.date(),
+            meta: zod.object({}).passthrough().nullish(),
+          }),
+        )
+        .optional(),
+      executorId: zod.string().nullish(),
+    }),
+  ),
+  total: zod.number(),
+});
+
+/**
+ * @summary Start a workflow run
+ */
+export const RunWorkflowBody = zod.object({
+  workflowId: zod.string(),
+  workflowVersion: zod.string().optional(),
+  input: zod.object({}).passthrough().optional(),
+  requestedBy: zod.string().optional(),
+  correlationId: zod.string().nullish(),
+  idempotencyKey: zod.string().nullish(),
+});
+
+/**
+ * @summary Get a workflow run by ID
+ */
+export const GetWorkflowRunParams = zod.object({
+  id: zod.coerce.string(),
+});
+
+export const GetWorkflowRunResponse = zod
+  .object({
+    id: zod.string(),
+    workflowId: zod.string(),
+    workflowVersion: zod.string(),
+    status: zod
+      .enum([
+        "queued",
+        "running",
+        "waiting_approval",
+        "waiting_input",
+        "completed",
+        "failed",
+        "cancelled",
+      ])
+      .describe(
+        "Authoritative run status. Python is the sole authority for transitions.\nTS projects Python snapshots only.\n- waiting_approval: blocked on an approval gate node\n- waiting_input: blocked on a human-input node\n",
+      ),
+    blockedNodeId: zod.string().nullish(),
+    resumabilityReason: zod
+      .enum([
+        "none",
+        "pending_approval",
+        "pending_human_input",
+        "terminal",
+        "invalid_checkpoint",
+      ])
+      .describe(
+        'Machine-readable reason why a run is currently not resumable (or \"none\" if it is).',
+      ),
+    lastCheckpointId: zod.string().nullish(),
+    resumableCheckpointId: zod.string().nullish(),
+    approvalState: zod
+      .enum(["none", "pending", "approved", "rejected"])
+      .optional(),
+    requestedBy: zod.string().optional(),
+    input: zod.object({}).passthrough().optional(),
+    error: zod.string().nullish(),
+    admittedAt: zod.coerce.date().nullish(),
+    startedAt: zod.coerce.date().nullish(),
+    completedAt: zod.coerce.date().nullish(),
+    failedAt: zod.coerce.date().nullish(),
+    createdAt: zod.coerce.date().optional(),
+    cancelState: zod
+      .enum(["cancel_requested", "cancelling", "cancelled"])
+      .nullish(),
+    cancelRequestedAt: zod.coerce.date().nullish(),
+    stateLog: zod
+      .array(
+        zod.object({
+          event: zod.string(),
+          at: zod.coerce.date(),
+          meta: zod.object({}).passthrough().nullish(),
+        }),
+      )
+      .optional(),
+    executorId: zod.string().nullish(),
+  })
+  .and(
+    zod.object({
+      nodes: zod
+        .array(
+          zod.object({
+            id: zod.string(),
+            runId: zod.string(),
+            nodeId: zod.string(),
+            nodeType: zod.string(),
+            status: zod.enum([
+              "pending",
+              "ready",
+              "running",
+              "blocked",
+              "waiting_input",
+              "waiting_approval",
+              "succeeded",
+              "failed_retryable",
+              "failed_terminal",
+              "compensated",
+              "skipped",
+            ]),
+            output: zod.object({}).passthrough().nullish(),
+            error: zod.string().nullish(),
+            waitingOn: zod.array(zod.string()).optional(),
+            startedAt: zod.coerce.date().nullish(),
+            completedAt: zod.coerce.date().nullish(),
+            checkpointRef: zod.string().nullish(),
+          }),
+        )
+        .optional(),
+      checkpoints: zod
+        .array(
+          zod.object({
+            id: zod.string(),
+            runId: zod.string(),
+            nodeId: zod.string(),
+            checkpointType: zod.string(),
+            state: zod.object({}).passthrough().nullish(),
+            createdAt: zod.coerce.date().optional(),
+          }),
+        )
+        .optional(),
+      approvals: zod
+        .array(
+          zod.object({
+            id: zod.string(),
+            runId: zod.string(),
+            nodeId: zod.string(),
+            status: zod.enum(["pending", "approved", "rejected"]),
+            reason: zod.string(),
+            objective: zod.string().nullish(),
+            metadata: zod.object({}).passthrough().optional(),
+            actorId: zod.string().nullish(),
+            note: zod.string().nullish(),
+            requestedAt: zod.coerce.date().nullish(),
+            decidedAt: zod.coerce.date().nullish(),
+          }),
+        )
+        .optional(),
+      resumability: zod
+        .object({
+          reason: zod
+            .enum([
+              "none",
+              "pending_approval",
+              "pending_human_input",
+              "terminal",
+              "invalid_checkpoint",
+            ])
+            .optional()
+            .describe(
+              'Machine-readable reason why a run is currently not resumable (or \"none\" if it is).',
+            ),
+          blockedNodeId: zod.string().nullish(),
+          canResume: zod.boolean().optional(),
+        })
+        .optional(),
+    }),
+  );
+
+/**
+ * Resumes a workflow run that is blocked pending an approval or human input
+(after the blocking condition has been resolved). Python is the sole execution
+authority; TS projects the resulting snapshot.
+
+ * @summary Resume a paused workflow run
+ */
+export const ResumeWorkflowRunParams = zod.object({
+  id: zod.coerce.string(),
+});
+
+export const ResumeWorkflowRunBody = zod.object({
+  checkpointId: zod.string().nullish(),
+  completedNodes: zod
+    .array(
+      zod.object({
+        nodeId: zod.string(),
+        name: zod.string(),
+        result: zod.object({}).passthrough().nullish(),
+      }),
+    )
+    .optional(),
+});
+
+export const ResumeWorkflowRunResponse = zod.object({
+  runId: zod.string(),
+  workflowId: zod.string(),
+  status: zod
+    .enum([
+      "queued",
+      "running",
+      "waiting_approval",
+      "waiting_input",
+      "completed",
+      "failed",
+      "cancelled",
+    ])
+    .describe(
+      "Authoritative run status. Python is the sole authority for transitions.\nTS projects Python snapshots only.\n- waiting_approval: blocked on an approval gate node\n- waiting_input: blocked on a human-input node\n",
+    ),
+});
+
+/**
+ * If the run is queued (not yet executing), it is immediately cancelled.
+If the run is executing, cancellation is requested and the executor honours it
+at the next safe checkpoint. Returns the resulting status.
+
+ * @summary Request cancellation of a workflow run
+ */
+export const CancelWorkflowRunParams = zod.object({
+  id: zod.coerce.string(),
+});
+
+export const CancelWorkflowRunBody = zod.object({
+  requestedBy: zod.string().optional(),
+});
+
+export const CancelWorkflowRunResponse = zod.object({
+  runId: zod.string(),
+  status: zod.enum(["cancelled", "cancel_requested"]),
+  cancelledAt: zod.coerce.date().optional(),
+});
+
+/**
+ * @summary List approval requests
+ */
+export const ListApprovalsQueryParams = zod.object({
+  runId: zod.coerce.string().optional(),
+});
+
+export const ListApprovalsResponse = zod.object({
+  approvals: zod.array(
+    zod.object({
+      id: zod.string(),
+      runId: zod.string(),
+      nodeId: zod.string(),
+      status: zod.enum(["pending", "approved", "rejected"]),
+      reason: zod.string(),
+      objective: zod.string().nullish(),
+      metadata: zod.object({}).passthrough().optional(),
+      actorId: zod.string().nullish(),
+      note: zod.string().nullish(),
+      requestedAt: zod.coerce.date().nullish(),
+      decidedAt: zod.coerce.date().nullish(),
+    }),
+  ),
+  total: zod.number(),
+});
+
+/**
+ * @summary Create an approval request for a workflow node
+ */
+export const CreateApprovalBody = zod.object({
+  runId: zod.string(),
+  nodeId: zod.string(),
+  reason: zod.string(),
+  objective: zod.string().nullish(),
+  metadata: zod.object({}).passthrough().optional(),
+});
+
+/**
+ * Records the approval decision and delegates continuation to Python.
+On approval: Python advances workflow execution and returns authoritative snapshot.
+On rejection: run is immediately terminated with status=failed.
+
+ * @summary Approve or reject an approval request
+ */
+export const DecideApprovalParams = zod.object({
+  id: zod.coerce.string(),
+});
+
+export const DecideApprovalBody = zod.object({
+  approved: zod.boolean(),
+  actorId: zod.string().nullish(),
+  note: zod.string().nullish(),
+});
+
+export const DecideApprovalResponse = zod.object({
+  id: zod.string(),
+  runId: zod.string(),
+  nodeId: zod.string(),
+  status: zod.enum(["pending", "approved", "rejected"]),
+  reason: zod.string(),
+  objective: zod.string().nullish(),
+  metadata: zod.object({}).passthrough().optional(),
+  actorId: zod.string().nullish(),
+  note: zod.string().nullish(),
+  requestedAt: zod.coerce.date().nullish(),
+  decidedAt: zod.coerce.date().nullish(),
+});
+
+/**
+ * Submits human-supplied input for a node in waiting_input state and delegates
+continuation to Python. Python advances execution and returns authoritative snapshot.
+TS projects the snapshot only.
+
+ * @summary Submit human input for a waiting_input workflow node
+ */
+export const SubmitHumanInputParams = zod.object({
+  id: zod.coerce.string(),
+  nodeId: zod.coerce.string(),
+});
+
+export const SubmitHumanInputBody = zod.object({
+  input: zod.object({}).passthrough(),
+  actorId: zod.string().nullish(),
 });

@@ -14,7 +14,5 @@ export const ListRunsStatus = {
   running: "running",
   completed: "completed",
   failed: "failed",
-  waiting_approval: "waiting_approval",
-  waiting_input: "waiting_input",
   cancelled: "cancelled",
-} as const;  // M-6
+} as const;

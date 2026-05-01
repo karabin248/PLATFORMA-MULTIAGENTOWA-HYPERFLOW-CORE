@@ -241,6 +241,320 @@ export interface RunMetrics {
   avgQualityScore?: number | null;
 }
 
+/**
+ * Authoritative run status. Python is the sole authority for transitions.
+TS projects Python snapshots only.
+- waiting_approval: blocked on an approval gate node
+- waiting_input: blocked on a human-input node
+
+ */
+export type WorkflowRunStatus =
+  (typeof WorkflowRunStatus)[keyof typeof WorkflowRunStatus];
+
+export const WorkflowRunStatus = {
+  queued: "queued",
+  running: "running",
+  waiting_approval: "waiting_approval",
+  waiting_input: "waiting_input",
+  completed: "completed",
+  failed: "failed",
+  cancelled: "cancelled",
+} as const;
+
+export type WorkflowNodeStatus =
+  (typeof WorkflowNodeStatus)[keyof typeof WorkflowNodeStatus];
+
+export const WorkflowNodeStatus = {
+  pending: "pending",
+  ready: "ready",
+  running: "running",
+  blocked: "blocked",
+  waiting_input: "waiting_input",
+  waiting_approval: "waiting_approval",
+  succeeded: "succeeded",
+  failed_retryable: "failed_retryable",
+  failed_terminal: "failed_terminal",
+  compensated: "compensated",
+  skipped: "skipped",
+} as const;
+
+/**
+ * Machine-readable reason why a run is currently not resumable (or "none" if it is).
+ */
+export type WorkflowResumabilityReason =
+  (typeof WorkflowResumabilityReason)[keyof typeof WorkflowResumabilityReason];
+
+export const WorkflowResumabilityReason = {
+  none: "none",
+  pending_approval: "pending_approval",
+  pending_human_input: "pending_human_input",
+  terminal: "terminal",
+  invalid_checkpoint: "invalid_checkpoint",
+} as const;
+
+export type CheckpointState = { [key: string]: unknown } | null;
+
+export interface Checkpoint {
+  id: string;
+  runId: string;
+  nodeId: string;
+  checkpointType: string;
+  state?: CheckpointState;
+  createdAt?: string;
+}
+
+export type ApprovalStatus =
+  (typeof ApprovalStatus)[keyof typeof ApprovalStatus];
+
+export const ApprovalStatus = {
+  pending: "pending",
+  approved: "approved",
+  rejected: "rejected",
+} as const;
+
+export type ApprovalMetadata = { [key: string]: unknown };
+
+export interface Approval {
+  id: string;
+  runId: string;
+  nodeId: string;
+  status: ApprovalStatus;
+  reason: string;
+  objective?: string | null;
+  metadata?: ApprovalMetadata;
+  actorId?: string | null;
+  note?: string | null;
+  requestedAt?: string | null;
+  decidedAt?: string | null;
+}
+
+export type WorkflowRunNodeOutput = { [key: string]: unknown } | null;
+
+export interface WorkflowRunNode {
+  id: string;
+  runId: string;
+  nodeId: string;
+  nodeType: string;
+  status: WorkflowNodeStatus;
+  output?: WorkflowRunNodeOutput;
+  error?: string | null;
+  waitingOn?: string[];
+  startedAt?: string | null;
+  completedAt?: string | null;
+  checkpointRef?: string | null;
+}
+
+/**
+ * Authoritative execution snapshot returned by Python. TS projects this
+into the database — it never invents these values.
+
+ */
+export interface WorkflowExecutionSnapshot {
+  status: WorkflowRunStatus;
+  nodes: WorkflowRunNode[];
+  checkpointId?: string | null;
+  blockedNodeId?: string | null;
+  resumabilityReason?: WorkflowResumabilityReason;
+  error?: string | null;
+}
+
+export type WorkflowRunApprovalState =
+  (typeof WorkflowRunApprovalState)[keyof typeof WorkflowRunApprovalState];
+
+export const WorkflowRunApprovalState = {
+  none: "none",
+  pending: "pending",
+  approved: "approved",
+  rejected: "rejected",
+} as const;
+
+export type WorkflowRunInput = { [key: string]: unknown };
+
+export type WorkflowRunCancelState =
+  | (typeof WorkflowRunCancelState)[keyof typeof WorkflowRunCancelState]
+  | null;
+
+export const WorkflowRunCancelState = {
+  cancel_requested: "cancel_requested",
+  cancelling: "cancelling",
+  cancelled: "cancelled",
+} as const;
+
+export type StateLogEntryMeta = { [key: string]: unknown } | null;
+
+export interface StateLogEntry {
+  event: string;
+  at: string;
+  meta?: StateLogEntryMeta;
+}
+
+export interface WorkflowRun {
+  id: string;
+  workflowId: string;
+  workflowVersion: string;
+  status: WorkflowRunStatus;
+  blockedNodeId?: string | null;
+  resumabilityReason: WorkflowResumabilityReason;
+  lastCheckpointId?: string | null;
+  resumableCheckpointId?: string | null;
+  approvalState?: WorkflowRunApprovalState;
+  requestedBy?: string;
+  input?: WorkflowRunInput;
+  error?: string | null;
+  admittedAt?: string | null;
+  startedAt?: string | null;
+  completedAt?: string | null;
+  failedAt?: string | null;
+  createdAt?: string;
+  cancelState?: WorkflowRunCancelState;
+  cancelRequestedAt?: string | null;
+  stateLog?: StateLogEntry[];
+  executorId?: string | null;
+}
+
+export type WorkflowRunDetailResumability = {
+  reason?: WorkflowResumabilityReason;
+  blockedNodeId?: string | null;
+  canResume?: boolean;
+};
+
+export type WorkflowRunDetail = WorkflowRun & {
+  nodes?: WorkflowRunNode[];
+  checkpoints?: Checkpoint[];
+  approvals?: Approval[];
+  resumability?: WorkflowRunDetailResumability;
+};
+
+export interface WorkflowDefinition {
+  id: string;
+  version: string;
+  name: string;
+  description?: string;
+  tags?: string[];
+  owner?: string | null;
+  createdAt?: string;
+}
+
+export type CreateWorkflowPayloadNodesItem = { [key: string]: unknown };
+
+export type CreateWorkflowPayloadEdgesItem = { [key: string]: unknown };
+
+export interface CreateWorkflowPayload {
+  /** @minLength 3 */
+  id: string;
+  version?: string;
+  /** @minLength 1 */
+  name: string;
+  description?: string;
+  nodes: CreateWorkflowPayloadNodesItem[];
+  edges: CreateWorkflowPayloadEdgesItem[];
+  tags?: string[];
+  owner?: string | null;
+}
+
+export type WorkflowRunRequestInput = { [key: string]: unknown };
+
+export interface WorkflowRunRequest {
+  workflowId: string;
+  workflowVersion?: string;
+  input?: WorkflowRunRequestInput;
+  requestedBy?: string;
+  correlationId?: string | null;
+  idempotencyKey?: string | null;
+}
+
+export type WorkflowResumeRequestCompletedNodesItemResult = {
+  [key: string]: unknown;
+} | null;
+
+export type WorkflowResumeRequestCompletedNodesItem = {
+  nodeId: string;
+  name: string;
+  result?: WorkflowResumeRequestCompletedNodesItemResult;
+};
+
+export interface WorkflowResumeRequest {
+  checkpointId?: string | null;
+  completedNodes?: WorkflowResumeRequestCompletedNodesItem[];
+}
+
+export interface WorkflowRunAdmittedResponse {
+  runId: string;
+  workflowId: string;
+  status: WorkflowRunStatus;
+}
+
+export type CreateApprovalRequestMetadata = { [key: string]: unknown };
+
+export interface CreateApprovalRequest {
+  runId: string;
+  nodeId: string;
+  reason: string;
+  objective?: string | null;
+  metadata?: CreateApprovalRequestMetadata;
+}
+
+export interface ApprovalDecision {
+  approved: boolean;
+  actorId?: string | null;
+  note?: string | null;
+}
+
+export type HumanInputPayloadInput = { [key: string]: unknown };
+
+export interface HumanInputPayload {
+  input: HumanInputPayloadInput;
+  actorId?: string | null;
+}
+
+export type HumanInputAcceptedStatus =
+  (typeof HumanInputAcceptedStatus)[keyof typeof HumanInputAcceptedStatus];
+
+export const HumanInputAcceptedStatus = {
+  accepted: "accepted",
+} as const;
+
+export interface HumanInputAccepted {
+  runId: string;
+  nodeId: string;
+  status: HumanInputAcceptedStatus;
+  continuationStatus?: WorkflowRunStatus;
+  lastCheckpointId?: string | null;
+}
+
+export type CancelResponseStatus =
+  (typeof CancelResponseStatus)[keyof typeof CancelResponseStatus];
+
+export const CancelResponseStatus = {
+  cancelled: "cancelled",
+  cancel_requested: "cancel_requested",
+} as const;
+
+export interface CancelResponse {
+  runId: string;
+  status: CancelResponseStatus;
+  cancelledAt?: string;
+}
+
+/**
+ * Executor ownership metadata for a workflow run
+ */
+export interface WorkflowRunLease {
+  executorId?: string | null;
+  leaseToken?: string | null;
+  leaseExpiresAt?: string | null;
+  heartbeatAt?: string | null;
+  retryAttempt?: number;
+}
+
+export interface OrchestratorError {
+  error: string;
+  code: string;
+  category: string;
+  retryable: boolean;
+  correlationId?: string | null;
+}
+
 export type ValidationErrorDetailsItem = {
   field: string;
   message: string;
@@ -337,4 +651,32 @@ export type CancelRun200 = {
   id: string;
   status: string;
   cancelledAt: string;
+};
+
+export type ListWorkflows200 = {
+  workflows: WorkflowDefinition[];
+  total: number;
+};
+
+export type ListWorkflowRunsParams = {
+  workflowId?: string;
+  status?: WorkflowRunStatus;
+};
+
+export type ListWorkflowRuns200 = {
+  runs: WorkflowRun[];
+  total: number;
+};
+
+export type CancelWorkflowRunBody = {
+  requestedBy?: string;
+};
+
+export type ListApprovalsParams = {
+  runId?: string;
+};
+
+export type ListApprovals200 = {
+  approvals: Approval[];
+  total: number;
 };

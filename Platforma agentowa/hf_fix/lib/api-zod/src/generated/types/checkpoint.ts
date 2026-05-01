@@ -5,13 +5,13 @@
  * Hyperflow Agent Platform API specification
  * OpenAPI spec version: 0.3.0
  */
+import type { CheckpointState } from "./checkpointState";
 
-export interface WorkflowDefinition {
+export interface Checkpoint {
   id: string;
-  version: string;
-  name: string;
-  description?: string;
-  tags?: string[];
-  owner?: string | null;
+  runId: string;
+  nodeId: string;
+  checkpointType: string;
+  state?: CheckpointState;
   createdAt?: Date;
 }

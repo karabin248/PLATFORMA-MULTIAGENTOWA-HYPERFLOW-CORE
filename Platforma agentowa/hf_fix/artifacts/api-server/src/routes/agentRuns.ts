@@ -1,7 +1,7 @@
 import { Router, type IRouter, type Request, type Response } from "express";
 import { db, agentRunsTable } from "@workspace/db";
 import { eq, desc, gte, lte, and, like, sql } from "drizzle-orm";
-import { RunAgentBody, RetryRunBody, ListRunsQueryParams } from "@workspace/api-zod";
+import { RunAgentBody, RetryRunBody, ListRunsQueryParams, RunAgentResponse, GetRunResponse } from "@workspace/api-zod";
 import { resolveAgent } from "../domain/catalog";
 import type { AgentRunRequest } from "../domain/agentRuns";
 import { pythonClient, type CoreResponse } from "../lib/pythonClient";
@@ -17,6 +17,7 @@ import { inFlightRegistry } from "../lib/inFlightRegistry";
 import { getConfig } from "../lib/config";
 import { randomUUID } from "crypto";
 import { buildImmutableRetryRequest } from "../lib/retrySnapshot";
+import { parseWithSchema, assertResponseShape } from "../lib/contractValidation";
 
 const router: IRouter = Router();
 
@@ -116,7 +117,7 @@ function buildTimeline(run: Record<string, unknown>) {
 
 router.post("/agents/run", async (req: Request, res: Response) => {
   try {
-    const parsed = RunAgentBody.safeParse(req.body);
+    const parsed = parseWithSchema(RunAgentBody, req.body);
     if (!parsed.success) {
       res.status(400).json({ error: "Validation failed", code: "VALIDATION_ERROR", category: "validation_error", retryable: false, correlationId: req.correlationId, details: zodErrorResponse(parsed.error) });
       return;
@@ -138,7 +139,7 @@ router.post("/agents/run", async (req: Request, res: Response) => {
         activeRuns: inFlightRegistry.activeCount,
         maxConcurrentRuns: config.maxConcurrentRuns,
         correlationId: req.correlationId,
-      });
+      }, "/agents/run"));
       return;
     }
 
@@ -258,15 +259,16 @@ router.post("/agents/run", async (req: Request, res: Response) => {
         logger.info({ runId: existingRun?.id, idempotencyKey }, "Idempotency key hit — returning cached run");
 
         if (existingRun?.status === "running") {
-          res.status(200).json({
+          res.status(200).json(assertResponseShape(RunAgentResponse, {
             runId: existingRun.id,
+            agentId: existingRun.agentId,
             status: "running",
             idempotencyHit: true,
             message: "Run already in progress with this idempotency key",
-          });
+          }, "/agents/run"));
           return;
         }
-        res.status(200).json({
+        res.status(200).json(assertResponseShape(RunAgentResponse, {
           runId: existingRun?.id,
           agentId: existingRun?.agentId,
           status: existingRun?.status,
@@ -276,7 +278,7 @@ router.post("/agents/run", async (req: Request, res: Response) => {
           canonicalTrace: existingRun?.canonicalTrace,
           durationMs: existingRun?.durationMs,
           idempotencyHit: true,
-        });
+        }, "/agents/run"));
         return;
       }
     } else {
@@ -392,7 +394,7 @@ router.post("/agents/run", async (req: Request, res: Response) => {
 
       metrics.recordRun(true, updates.durationMs ?? 0);
       emitAuditEvent({ action: "run.completed", resourceType: "run", resourceId: runId, correlationId: req.correlationId, details: { agentId: agent.id, durationMs: updates.durationMs } });
-      res.json({
+      res.json(assertResponseShape(RunAgentResponse, {
         runId,
         agentId: agent.id,
         status: "completed",
@@ -405,7 +407,7 @@ router.post("/agents/run", async (req: Request, res: Response) => {
         canonicalPhases: coreData.canonical_phases || null,
         canonicalTrace: coreData.canonical_trace || null,
         durationMs: updates.durationMs,
-      });
+      }, "/agents/run"));
     } finally {
       inFlightRegistry.remove(runId);
       metrics.activeRuns = inFlightRegistry.activeCount;
@@ -419,7 +421,7 @@ router.post("/agents/run", async (req: Request, res: Response) => {
 
 router.get("/agent-runs", async (req: Request, res: Response) => {
   try {
-    const parsed = ListRunsQueryParams.safeParse(req.query);
+    const parsed = parseWithSchema(ListRunsQueryParams, req.query);
     const params = parsed.success ? parsed.data : req.query;
 
     const limit = Math.min(Math.max(Number(params.limit) || 50, 1), 200);
@@ -624,7 +626,7 @@ router.post("/agent-runs/:id/retry", async (req: Request, res: Response) => {
       return;
     }
 
-    const parsedBody = RetryRunBody.safeParse(req.body || {});
+    const parsedBody = parseWithSchema(RetryRunBody, req.body || {});
     if (!parsedBody.success) {
       res.status(400).json({ error: "Validation failed", code: "VALIDATION_ERROR", category: "validation_error", retryable: false, correlationId: req.correlationId, details: zodErrorResponse(parsedBody.error) });
       return;
