@@ -177,7 +177,7 @@ export const workflowRunsTable = pgTable("workflow_runs", {
     .default([]),
 
 }, (table) => ([
-  uniqueIndex("workflow_runs_idempotency_key_idx").on(table.idempotencyKey),
+  uniqueIndex("workflow_runs_workflow_id_idempotency_key_idx").on(table.workflowId, table.idempotencyKey),
 
   /**
    * DB-level status guard. Rejects any INSERT or UPDATE that sets status to a
