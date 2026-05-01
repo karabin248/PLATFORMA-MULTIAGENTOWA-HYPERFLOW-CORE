@@ -193,8 +193,6 @@ async def call_model(
     Raises:
         OpenRouterUnavailable on persistent failure.
     """
-    api_key = _api_key()
-
     # C-1 FIX: validate and allowlist-check the model hint before it reaches
     # the OpenRouter payload.  _validate_model_hint raises ValueError (which
     # the caller maps to OpenRouterUnavailable) on format violations or
@@ -203,6 +201,8 @@ async def call_model(
         validated_hint = _validate_model_hint(model_hint)
     except ValueError as exc:
         raise OpenRouterUnavailable(f"Model hint rejected: {exc}") from exc
+
+    api_key = _api_key()
 
     model = validated_hint or _model()
     retries = _max_retries()
