@@ -1,0 +1,10 @@
+{
+  "deployableUnits": [
+    "api-server",
+    "hyperflow-core",
+    "operator-panel"
+  ],
+  "nonDeployableUnits": [
+    "mockup-sandbox"
+  ]
+}

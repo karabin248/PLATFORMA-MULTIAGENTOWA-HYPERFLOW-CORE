@@ -1,0 +1,6 @@
+{
+  "deployable": true,
+  "owner": "platform-shell",
+  "runtime": "node",
+  "entrypoint": "src/main.ts"
+}
