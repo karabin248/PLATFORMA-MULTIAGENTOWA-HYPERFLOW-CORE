@@ -1,5 +1,6 @@
 import { logger } from "./logger";
 import { getConfig } from "./config";
+import { assertKnownStatusReasonCombination, validateRuntimeAuthorityResponse } from "./runtimeAuthorityContract";
 
 function getCoreUrl(): string {
   return getConfig().coreUrl;
@@ -231,6 +232,8 @@ export async function health(): Promise<CoreResult> {
       return { ok: false, error: makeCoreError(resp.status, "Core health check failed", "CORE_UNHEALTHY") };
     }
     const data = (await resp.json()) as CoreResponse;
+    validateRuntimeAuthorityResponse(data);
+    assertKnownStatusReasonCombination(String((data as Record<string, unknown>).status ?? ""), (data as Record<string, unknown>).resumabilityReason as string | undefined);
     return { ok: true, data };
   } catch (err) {
     logger.error({ err }, "Core health check unreachable");
@@ -335,6 +338,8 @@ export async function runWorkflow(request: CoreWorkflowRunRequest, timeoutMs?: n
     }
 
     const data = (await resp.json()) as CoreResponse;
+    validateRuntimeAuthorityResponse(data);
+    assertKnownStatusReasonCombination(String((data as Record<string, unknown>).status ?? ""), (data as Record<string, unknown>).resumabilityReason as string | undefined);
     return { ok: true, data };
   } catch (err) {
     if (err instanceof DOMException && err.name === "AbortError") {
@@ -365,6 +370,8 @@ export async function resumeWorkflow(request: CoreWorkflowResumeRequest, timeout
     }
 
     const data = (await resp.json()) as CoreResponse;
+    validateRuntimeAuthorityResponse(data);
+    assertKnownStatusReasonCombination(String((data as Record<string, unknown>).status ?? ""), (data as Record<string, unknown>).resumabilityReason as string | undefined);
     return { ok: true, data };
   } catch (err) {
     if (err instanceof DOMException && err.name === "AbortError") {
@@ -440,6 +447,8 @@ export async function continueApproval(
       return { ok: false, error: makeCoreError(resp.status, `Core returned ${resp.status}: ${text.slice(0, 200)}`, "CORE_ERROR") };
     }
     const data = (await resp.json()) as CoreResponse;
+    validateRuntimeAuthorityResponse(data);
+    assertKnownStatusReasonCombination(String((data as Record<string, unknown>).status ?? ""), (data as Record<string, unknown>).resumabilityReason as string | undefined);
     return { ok: true, data };
   } catch (err) {
     if (err instanceof DOMException && err.name === "AbortError") {

@@ -30,6 +30,7 @@ import { projectContinuationSnapshot, appendStateLogEvent, WORKFLOW_RUN_STATE_LO
 import { classifyCoreError } from "./errorClassifier";
 import { logger } from "./logger";
 import { getConfig } from "./config";
+import { assertKnownStatusReasonCombination, validateRuntimeAuthorityResponse } from "./runtimeAuthorityContract";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -236,6 +237,8 @@ async function executeRun(runId: string, executorId: string): Promise<void> {
     }
 
     const response = coreResult.data as unknown as Record<string, unknown>;
+    validateRuntimeAuthorityResponse(response);
+    assertKnownStatusReasonCombination(String(response.status ?? ""), response.resumabilityReason as string | undefined);
     const nodes = Array.isArray(response.nodes)
       ? (response.nodes as Array<Record<string, unknown>>)
       : [];

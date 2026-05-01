@@ -32,6 +32,7 @@ import {
   approvalsTable,
 } from "@workspace/db";
 import { logger } from "./logger";
+import { assertKnownStatusReasonCombination } from "./runtimeAuthorityContract";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -157,6 +158,7 @@ export async function projectExecutionSnapshot(
   }
 
   const runStatus = String(snapshot.status ?? "completed");
+  assertKnownStatusReasonCombination(runStatus, snapshot.resumabilityReason ?? null);
   const approvalState = runStatus === "waiting_approval" ? "pending" : "none";
   const blockedNodeId = pendingApprovalNodeId ?? pendingHumanNodeId ?? null;
   const resumabilityReason = pendingApprovalNodeId

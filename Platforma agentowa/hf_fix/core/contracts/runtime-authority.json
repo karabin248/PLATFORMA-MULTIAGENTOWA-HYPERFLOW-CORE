@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hyperflow.local/contracts/runtime-authority.json",
+  "title": "Hyperflow Execution Truth Contract",
+  "version": "1.0.0",
+  "type": "object",
+  "required": ["status", "nodes"],
+  "properties": {
+    "status": { "enum": ["completed", "failed", "waiting_approval", "waiting_input", "cancelled"] },
+    "blockedNodeId": { "type": ["string", "null"] },
+    "checkpointId": { "type": ["string", "null"] },
+    "resumabilityReason": { "enum": ["none", "pending_approval", "pending_human_input", "terminal"] },
+    "error": { "type": "string" },
+    "nodes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["nodeId", "status"],
+        "properties": {
+          "nodeId": { "type": "string" },
+          "name": { "type": "string" },
+          "status": { "enum": ["succeeded", "failed", "skipped", "waiting_approval", "waiting_input"] },
+          "result": { "type": ["object", "null"] },
+          "startedAt": { "type": ["string", "null"] },
+          "completedAt": { "type": ["string", "null"] }
+        },
+        "additionalProperties": true
+      }
+    }
+  },
+  "additionalProperties": true,
+  "x-statusReasonMatrix": {
+    "completed": ["none"],
+    "failed": ["none", "terminal"],
+    "cancelled": ["terminal"],
+    "waiting_approval": ["pending_approval"],
+    "waiting_input": ["pending_human_input"]
+  }
+}
