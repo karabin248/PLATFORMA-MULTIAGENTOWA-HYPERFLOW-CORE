@@ -1,6 +1,42 @@
 import { logger } from "./logger";
 import { getConfig } from "./config";
 
+// ---------------------------------------------------------------------------
+// M-3 FIX: Runtime schema validation for Python core responses
+//
+// Previously every response was cast via `(await resp.json()) as CoreResponse`
+// — TypeScript's structural cast is compile-time only and provides zero
+// runtime protection.  A malformed Python response (partial failure, shape
+// change, missing field) propagated silently into downstream code, causing
+// undefined-property access and false-success states.
+//
+// We introduce a thin Zod-style manual validator that checks the fields
+// every call site actually uses.  This is intentionally minimal — we do not
+// replicate the full Pydantic model — but it catches the category of errors
+// that cause real production failures: missing status, missing nodes array,
+// and non-string error values.
+//
+// Validation failures surface as CoreError { code: "CORE_RESPONSE_INVALID" }
+// so callers treat them identically to any other core error and do not
+// proceed with undefined data.
+// ---------------------------------------------------------------------------
+
+function validateWorkflowResponse(data: unknown): asserts data is Record<string, unknown> & { status: string } {
+  if (typeof data !== "object" || data === null) {
+    throw new Error(`Expected object response from Python core, got ${typeof data}`);
+  }
+  const d = data as Record<string, unknown>;
+  if (typeof d.status !== "string") {
+    throw new Error(`Python core response missing required field 'status' (got ${typeof d.status})`);
+  }
+  if ("nodes" in d && !Array.isArray(d.nodes)) {
+    throw new Error(`Python core response field 'nodes' is not an array (got ${typeof d.nodes})`);
+  }
+  if ("error" in d && d.error !== null && d.error !== undefined && typeof d.error !== "string") {
+    throw new Error(`Python core response field 'error' is not a string (got ${typeof d.error})`);
+  }
+}
+
 function getCoreUrl(): string {
   return getConfig().coreUrl;
 }
@@ -334,8 +370,16 @@ export async function runWorkflow(request: CoreWorkflowRunRequest, timeoutMs?: n
       return { ok: false, error: makeCoreError(resp.status, `Core returned ${resp.status}: ${text.slice(0, 200)}`, "CORE_ERROR") };
     }
 
-    const data = (await resp.json()) as CoreResponse;
-    return { ok: true, data };
+    const data = (await resp.json()) as unknown;
+    // M-3 FIX: validate response shape before returning to callers.
+    try {
+      validateWorkflowResponse(data);
+    } catch (validationErr) {
+      const msg = validationErr instanceof Error ? validationErr.message : String(validationErr);
+      logger.error({ msg, url: "/v1/workflow/run" }, "Python core response failed validation");
+      return { ok: false, error: makeCoreError(502, msg, "CORE_RESPONSE_INVALID") };
+    }
+    return { ok: true, data: data as CoreResponse };
   } catch (err) {
     if (err instanceof DOMException && err.name === "AbortError") {
       if (externalSignal?.aborted) {
@@ -364,8 +408,16 @@ export async function resumeWorkflow(request: CoreWorkflowResumeRequest, timeout
       return { ok: false, error: makeCoreError(resp.status, `Core returned ${resp.status}: ${text.slice(0, 200)}`, "CORE_ERROR") };
     }
 
-    const data = (await resp.json()) as CoreResponse;
-    return { ok: true, data };
+    const data = (await resp.json()) as unknown;
+    // M-3 FIX: validate response shape before returning to callers.
+    try {
+      validateWorkflowResponse(data);
+    } catch (validationErr) {
+      const msg = validationErr instanceof Error ? validationErr.message : String(validationErr);
+      logger.error({ msg, url: "/v1/workflow/resume" }, "Python core response failed validation");
+      return { ok: false, error: makeCoreError(502, msg, "CORE_RESPONSE_INVALID") };
+    }
+    return { ok: true, data: data as CoreResponse };
   } catch (err) {
     if (err instanceof DOMException && err.name === "AbortError") {
       if (externalSignal?.aborted) {
