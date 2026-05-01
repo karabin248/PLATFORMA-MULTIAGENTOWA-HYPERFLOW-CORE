@@ -181,6 +181,32 @@ export interface CoreError {
   details?: Record<string, unknown>;
 }
 
+const WORKFLOW_RUN_STATUSES = new Set(["queued", "running", "completed", "failed", "cancelled", "waiting_approval", "waiting_input"]);
+const WORKFLOW_NODE_STATUSES = new Set(["pending", "running", "succeeded", "failed", "skipped", "waiting_approval", "waiting_input", "compensated", "cancelled"]);
+
+function validateWorkflowSnapshotShape(payload: unknown): { ok: true } | { ok: false; message: string } {
+  if (!payload || typeof payload !== "object") return { ok: false, message: "Workflow response must be an object" };
+  const data = payload as Record<string, unknown>;
+  if (!WORKFLOW_RUN_STATUSES.has(String(data.status ?? ""))) {
+    return { ok: false, message: `Unknown workflow status '${String(data.status ?? "")}'` };
+  }
+  if (!Array.isArray(data.nodes)) return { ok: false, message: "Workflow response nodes must be an array" };
+  for (const [index, node] of data.nodes.entries()) {
+    if (!node || typeof node !== "object") return { ok: false, message: `Node at index ${index} must be an object` };
+    const record = node as Record<string, unknown>;
+    if (typeof record.nodeId !== "string" || record.nodeId.length === 0) return { ok: false, message: `Node at index ${index} has invalid nodeId` };
+    const nodeStatus = String(record.status ?? "");
+    if (!WORKFLOW_NODE_STATUSES.has(nodeStatus)) return { ok: false, message: `Unknown node status '${nodeStatus}' at index ${index}` };
+    if (nodeStatus === "waiting_approval" && data.status !== "waiting_approval") {
+      return { ok: false, message: "Invalid shape: waiting_approval node requires run status waiting_approval" };
+    }
+    if (nodeStatus === "waiting_input" && data.status !== "waiting_input") {
+      return { ok: false, message: "Invalid shape: waiting_input node requires run status waiting_input" };
+    }
+  }
+  return { ok: true };
+}
+
 export type CoreResult =
   | { ok: true; data: CoreResponse }
   | { ok: false; error: CoreError };
@@ -231,6 +257,10 @@ export async function health(): Promise<CoreResult> {
       return { ok: false, error: makeCoreError(resp.status, "Core health check failed", "CORE_UNHEALTHY") };
     }
     const data = (await resp.json()) as CoreResponse;
+    const validation = validateWorkflowSnapshotShape(data);
+    if (!validation.ok) {
+      return { ok: false, error: makeCoreError(422, validation.message, "CORE_INVALID_WORKFLOW_RESPONSE") };
+    }
     return { ok: true, data };
   } catch (err) {
     logger.error({ err }, "Core health check unreachable");
@@ -335,6 +365,10 @@ export async function runWorkflow(request: CoreWorkflowRunRequest, timeoutMs?: n
     }
 
     const data = (await resp.json()) as CoreResponse;
+    const validation = validateWorkflowSnapshotShape(data);
+    if (!validation.ok) {
+      return { ok: false, error: makeCoreError(422, validation.message, "CORE_INVALID_WORKFLOW_RESPONSE") };
+    }
     return { ok: true, data };
   } catch (err) {
     if (err instanceof DOMException && err.name === "AbortError") {
@@ -365,6 +399,10 @@ export async function resumeWorkflow(request: CoreWorkflowResumeRequest, timeout
     }
 
     const data = (await resp.json()) as CoreResponse;
+    const validation = validateWorkflowSnapshotShape(data);
+    if (!validation.ok) {
+      return { ok: false, error: makeCoreError(422, validation.message, "CORE_INVALID_WORKFLOW_RESPONSE") };
+    }
     return { ok: true, data };
   } catch (err) {
     if (err instanceof DOMException && err.name === "AbortError") {
@@ -440,6 +478,10 @@ export async function continueApproval(
       return { ok: false, error: makeCoreError(resp.status, `Core returned ${resp.status}: ${text.slice(0, 200)}`, "CORE_ERROR") };
     }
     const data = (await resp.json()) as CoreResponse;
+    const validation = validateWorkflowSnapshotShape(data);
+    if (!validation.ok) {
+      return { ok: false, error: makeCoreError(422, validation.message, "CORE_INVALID_WORKFLOW_RESPONSE") };
+    }
     return { ok: true, data };
   } catch (err) {
     if (err instanceof DOMException && err.name === "AbortError") {
@@ -471,6 +513,10 @@ export async function continueHumanInput(
       return { ok: false, error: makeCoreError(resp.status, `Core returned ${resp.status}: ${text.slice(0, 200)}`, "CORE_ERROR") };
     }
     const data = (await resp.json()) as CoreResponse;
+    const validation = validateWorkflowSnapshotShape(data);
+    if (!validation.ok) {
+      return { ok: false, error: makeCoreError(422, validation.message, "CORE_INVALID_WORKFLOW_RESPONSE") };
+    }
     return { ok: true, data };
   } catch (err) {
     if (err instanceof DOMException && err.name === "AbortError") {
@@ -679,4 +725,3 @@ export async function callPythonWorkflowResume(
     input,
   );
 }
-
